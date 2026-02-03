@@ -1,7 +1,8 @@
 "use client";
-import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { User, Mail, Key, Shield, Bell, Camera, Save, ArrowLeft } from "lucide-react";
+import { useForm } from "react-hook-form";
+import useSWRMutation from "swr/mutation";
+import { User, Key, Shield, Bell, Camera, Save, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,23 +12,57 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiUpdateUser } from "@/lib/api";
+import { useEffect, useState } from "react";
+
+interface AccountFormValues {
+  name: string;
+  email: string;
+}
 
 export function AccountPage() {
   const router = useRouter();
-  const { user, token, setUser } = useAuth() as any;
-  const [name, setName] = useState(user?.name || '');
-  const [email, setEmail] = useState(user?.email || '');
-  const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || '');
+  const { user, token, setUser } = useAuth();
   const [notifications, setNotifications] = useState(true);
   const [twoFactor, setTwoFactor] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || "");
+  const {
+    register,
+    handleSubmit,
+    formState: { isSubmitting },
+    reset,
+  } = useForm<AccountFormValues>({
+    defaultValues: {
+      name: user?.name || "",
+      email: user?.email || "",
+    },
+  });
 
-  const handleSave = async () => {
+  // Re-sync form defaults when user changes (e.g. after refetch)
+  useEffect(() => {
+    reset({
+      name: user?.name || "",
+      email: user?.email || "",
+    });
+    setAvatarUrl(user?.avatarUrl || "");
+  }, [user, reset]);
+
+  // SWR mutation for updating user
+  const { trigger: mutateUser, isMutating } = useSWRMutation(
+    token && user ? ["user", user.id] : null,
+    async (_key, { arg }: { arg: AccountFormValues }) => {
+      if (!token || !user) throw new Error("Not authenticated");
+      const updated = await apiUpdateUser(token, user.id, { name: arg.name, email: arg.email });
+      if (setUser) {
+        setUser({ ...user, name: updated.name, email: updated.email, avatarUrl: updated.avatarUrl });
+      }
+      return updated;
+    }
+  );
+
+  const onSubmit = async (values: AccountFormValues) => {
     if (!user || !token) return;
     try {
-      const updated = await apiUpdateUser(token, user.id, { email });
-      if (setUser) {
-        setUser({ ...user, email: updated.email });
-      }
+      await mutateUser(values);
       toast.success("Account settings saved successfully!");
     } catch (err: any) {
       toast.error(err?.message || "Failed to save account settings");
@@ -100,7 +135,7 @@ export function AccountPage() {
                 {avatarUrl ? (
                   <img
                     src={`${process.env.NEXT_PUBLIC_API_BASE_URL}${avatarUrl}`}
-                    alt={user?.name || 'Avatar'}
+                    alt={user?.name || "Avatar"}
                     className="w-24 h-24 rounded-2xl object-cover shadow-lg"
                   />
                 ) : (
@@ -121,40 +156,35 @@ export function AccountPage() {
                 </Button>
               </div>
               <div>
-                <h3 className="text-lg font-semibold">{user?.name || 'User'}</h3>
-                <p className="text-sm text-gray-500">{user?.email || 'user@example.com'}</p>
+                <h3 className="text-lg font-semibold">{user?.name || "User"}</h3>
+                <p className="text-sm text-gray-500">{user?.email || "user@example.com"}</p>
               </div>
             </div>
 
             <Separator />
 
             {/* Form Fields */}
-            <div className="grid gap-6">
-              <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
-                <Input
-                  id="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="h-11"
-                />
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+              <div className="grid gap-6">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Full Name</Label>
+                  <Input id="name" {...register("name")} className="h-11" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email Address</Label>
+                  <Input id="email" type="email" {...register("email")} className="h-11" />
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="h-11"
-                />
-              </div>
-            </div>
 
-            <Button onClick={handleSave} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600">
-              <Save className="w-4 h-4 mr-2" />
-              Save Changes
-            </Button>
+              <Button
+                type="submit"
+                disabled={isSubmitting || isMutating}
+                className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 disabled:opacity-70"
+              >
+                <Save className="w-4 h-4 mr-2" />
+                {isSubmitting || isMutating ? "Saving..." : "Save Changes"}
+              </Button>
+            </form>
           </CardContent>
         </Card>
 

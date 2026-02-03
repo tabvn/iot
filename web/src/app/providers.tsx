@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 
 interface ProvidersProps {
   children: React.ReactNode;
-  session?: { user: { id: string; email: string; avatarUrl?: string }; token: string } | null;
+  session?: { user: { id: string; name: string; email: string; avatarUrl?: string }; token: string } | null;
 }
 
 export function Providers({ children, session }: ProvidersProps) {

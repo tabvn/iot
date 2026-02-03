@@ -17,7 +17,7 @@ export async function apiSignup(name: string, email: string, password: string) {
   const res = await fetch(`${API_BASE}/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, passwordHash: password }),
+    body: JSON.stringify({ name,email, passwordHash: password }),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -36,7 +36,7 @@ export async function apiGetMe(token: string) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error || "Failed to fetch user");
   }
-  return (await res.json()) as { userId: string; email: string; avatarUrl?: string };
+  return (await res.json()) as { userId: string; name: string; email: string; avatarUrl?: string };
 }
 
 export async function apiListWorkspaces(token: string, userId: string) {
@@ -99,7 +99,11 @@ export async function apiCheckSlugAvailable(slug: string): Promise<boolean> {
   return res.status === 404;
 }
 
-export async function apiUpdateUser(token: string, userId: string, payload: { email?: string; avatarUrl?: string }) {
+export async function apiUpdateUser(
+  token: string,
+  userId: string,
+  payload: { name?: string; email?: string; avatarUrl?: string },
+) {
   const res = await fetch(`${API_BASE}/users/${userId}`, {
     method: "PUT",
     headers: {
@@ -112,7 +116,7 @@ export async function apiUpdateUser(token: string, userId: string, payload: { em
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error || "Failed to update user");
   }
-  return res.json() as Promise<{ userId: string; email: string; avatarUrl?: string }>;
+  return res.json() as Promise<{ userId: string; name: string; email: string; avatarUrl?: string }>;
 }
 
 export interface CreateDevicePayload {

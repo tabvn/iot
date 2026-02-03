@@ -4,7 +4,7 @@ export type PK = string;
 export type SK = string;
 
 // Single-table logical entity types
-export type EntityType = "USER" | "WORKSPACE" | "DEVICE" | "SESSION" | "AUTOMATION" | "API_KEY";
+export type EntityType = "USER" | "USER-EMAIL" | "WORKSPACE" | "DEVICE" | "SESSION" | "AUTOMATION" | "API_KEY";
 
 export interface BaseEntity {
   pk: PK;      // e.g. USER#<userId>, WS#<workspaceId>, DEV#<deviceId>
@@ -17,11 +17,18 @@ export interface BaseEntity {
 export interface UserEntity extends BaseEntity {
   entityType: "USER";
   userId: string;
+  name: string;
   email: string;
   passwordHash: string;
   avatarUrl?: string;
 }
 
+export interface UserEmailEntity extends BaseEntity {
+    entityType: "USER-EMAIL";
+    userId: string;
+    email: string;
+    passwordHash: string;
+}
 export interface WorkspaceEntity extends BaseEntity {
   entityType: "WORKSPACE";
   workspaceId: string;
@@ -226,6 +233,7 @@ export interface WorkspaceApiKeyEntity extends BaseEntity {
 
 export type TableEntity =
   | UserEntity
+  | UserEmailEntity
   | WorkspaceEntity
   | DeviceEntity
   | SessionEntity

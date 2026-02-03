@@ -2,7 +2,6 @@
 
 import React, { createContext, useContext, useState, useCallback, ReactNode } from "react";
 import { loginAction, signupAction, logoutAction } from "@/app/actions/auth";
-import { useRouter } from "next/navigation";
 
 interface User {
   id: string;
@@ -30,7 +29,6 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ children, initialSession }: AuthProviderProps) {
-  const router = useRouter();
   const [user, setUser] = useState<User | null>(initialSession?.user ?? null);
   const [token, setToken] = useState<string | null>(initialSession?.token ?? null);
   const [isAuthenticated, setIsAuthenticated] = useState(!!initialSession);
