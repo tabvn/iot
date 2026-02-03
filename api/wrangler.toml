@@ -1,0 +1,30 @@
+name = "iot"
+main = "src/worker.ts"
+compatibility_date = "2025-02-01"
+
+[durable_objects]
+bindings = [
+  { name = "DEVICE_DO", class_name = "DeviceDurableObject" },
+  { name = "USER_DO", class_name = "UserDurableObject" },
+  { name = "WORKSPACE_DO", class_name = "WorkspaceDurableObject" },
+  { name = "WORKSPACE_AUTOMATION_DO", class_name = "WorkspaceAutomationDO" },
+  { name = "WORKSPACE_CLEANUP_DO", class_name = "WorkspaceCleanupDurableObject" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["DeviceDurableObject", "UserDurableObject", "WorkspaceDurableObject", "WorkspaceAutomationDO", "WorkspaceCleanupDurableObject"]
+
+[[r2_buckets]]
+binding = "DEVICE_DATA_BUCKET"
+bucket_name = "iot"
+
+[vars]
+TABLE_BUCKET_PREFIX = "iot/" # logical prefix for single-table style keys
+USER_JWT_SECRET = "gW9hRut/Zb4/6VTgAryuMaK4ObufeQonLJ2v3iJCezA="
+
+[triggers]
+crons = ["* * * * *"]  # every minute – drives schedule automations
+
+[observability]
+enabled = true

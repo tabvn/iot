@@ -1,0 +1,18 @@
+{
+  "name": "thebaycitydev-api",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "dev": "wrangler dev src/worker.ts --local",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "itty-router": "^4.0.25"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250204.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.100.0"
+  }
+}
