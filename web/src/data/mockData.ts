@@ -204,7 +204,7 @@ export const mockWorkspaces: Workspace[] = [
     description: 'Main home automation workspace',
     createdAt: '2025-01-15',
     deviceCount: 9,
-    apiKey: 'sk_live_a8b2c4d6e8f0g2h4i6j8k0l2m4n6o8p0',
+    apiKey: '',
     webhookUrl: 'https://api.example.com/webhooks/smart-home',
     slug: 'smart-home',
     members: mockMembers,
