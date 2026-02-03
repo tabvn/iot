@@ -391,7 +391,7 @@ export const mockWorkspaces: Workspace[] = [
     description: 'Corporate office monitoring system',
     createdAt: '2025-01-10',
     deviceCount: 5,
-    apiKey: 'sk_live_q1r3s5t7u9v1w3x5y7z9a1b3c5d7e9f1',
+    apiKey: 'REDACTED_SECRET_KEY',
     webhookUrl: 'https://api.example.com/webhooks/office',
     slug: 'office-building',
     members: mockMembers,
