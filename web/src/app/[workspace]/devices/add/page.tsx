@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { AddDeviceForm } from "@/components/AddDeviceForm";
+import { DeviceForm } from "@/components/DeviceForm";
 import { ArrowLeft, X, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
@@ -54,7 +54,7 @@ export default function AddDevice() {
         </div>
       </div>
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <AddDeviceForm workspaceSlug={workspaceSlug} />
+        <DeviceForm workspaceSlug={workspaceSlug} mode="create" />
       </div>
     </div>
   );

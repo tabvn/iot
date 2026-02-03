@@ -7,7 +7,7 @@ import {
   ArrowLeft, TrendingUp, Activity, Clock, Database, Download,
   AlertCircle, CheckCircle2, Loader2,
   Wifi, BarChart3, LineChart, FileJson, Search, X, Copy, Check,
-  ChevronDown, ChevronUp, Table, RefreshCw,
+  ChevronDown, ChevronUp, Table, RefreshCw, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -428,6 +428,15 @@ export function DeviceAnalytics() {
               </div>
             </div>
             <div className="flex items-center gap-2 w-full sm:w-auto">
+              <Button
+                variant="outline"
+                onClick={() => router.push(`/${workspaceSlug}/device/${deviceId}/edit`)}
+                className="gap-2 flex-1 sm:flex-none"
+                size="sm"
+              >
+                <Pencil className="w-4 h-4" />
+                <span className="hidden sm:inline">Edit</span>
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => handleExportData("csv")}

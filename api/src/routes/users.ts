@@ -206,7 +206,6 @@ export function usersRouter(router: RouterType) {
     await env.DEVICE_DATA_BUCKET.put(key, (request as Request).body, {
       httpMetadata: { contentType },
     });
-
     const now = new Date().toISOString();
     const avatarUrl = `/users/${userId}/avatar`;
 

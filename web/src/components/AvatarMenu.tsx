@@ -54,7 +54,7 @@ export function AvatarMenu({ currentWorkspaceId }: AvatarMenuProps) {
 
   const avatarImage = (size: string) => (
     <img
-      src={user.avatarUrl}
+      src={`${process.env.NEXT_PUBLIC_API_BASE_URL}${user.avatarUrl}`}
       alt={displayName}
       className={`${size} rounded-full object-cover`}
     />

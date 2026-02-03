@@ -23,7 +23,7 @@ export async function apiSignup(name: string, email: string, password: string) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(body.error || "Sign up failed");
   }
-  return res.json();
+  return res.json() as Promise<{ userId: string }>;
 }
 
 export async function apiGetMe(token: string) {
@@ -287,4 +287,218 @@ export async function apiCreateDevice(token: string, workspaceSlug: string, payl
     throw new Error(body.error || "Failed to create device");
   }
   return res.json();
+}
+
+// ============================================================================
+// Automations API
+// ============================================================================
+
+export type AutomationStatus = "active" | "paused" | "disabled";
+export type AutomationTriggerType = "device_data" | "device_status" | "schedule";
+
+export interface DeviceDataCondition {
+  field: string;
+  operator: "equals" | "not_equals" | "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal" | "contains" | "not_contains";
+  value: unknown;
+}
+
+export interface DeviceDataTriggerConfig {
+  type: "device_data";
+  deviceId: string;
+  logic: "AND" | "OR";
+  conditions: DeviceDataCondition[];
+}
+
+export interface DeviceStatusTriggerConfig {
+  type: "device_status";
+  deviceId: string;
+  status: "online" | "offline";
+}
+
+export interface ScheduleTriggerConfig {
+  type: "schedule";
+  cron: string;
+  timezone?: string;
+}
+
+export type AutomationTriggerConfig =
+  | DeviceDataTriggerConfig
+  | DeviceStatusTriggerConfig
+  | ScheduleTriggerConfig;
+
+export type AutomationActionType = "send_webhook" | "send_email" | "send_sms" | "update_device" | "delay" | "log";
+
+export interface AutomationActionConfigBase {
+  type: AutomationActionType;
+  delayMs?: number;
+}
+
+export interface SendWebhookActionConfig extends AutomationActionConfigBase {
+  type: "send_webhook";
+  url: string;
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  headers?: Record<string, string>;
+  bodyTemplate?: Record<string, unknown>;
+}
+
+export interface UpdateDeviceActionConfig extends AutomationActionConfigBase {
+  type: "update_device";
+  targetDeviceId: string;
+  field: string;
+  value: unknown;
+}
+
+export interface SendEmailActionConfig extends AutomationActionConfigBase {
+  type: "send_email";
+  to: string;
+  subject: string;
+  body: string;
+}
+
+export interface DelayActionConfig extends AutomationActionConfigBase {
+  type: "delay";
+  delaySeconds: number;
+}
+
+export interface LogActionConfig extends AutomationActionConfigBase {
+  type: "log";
+  message: string;
+}
+
+export type AutomationActionConfig =
+  | SendWebhookActionConfig
+  | UpdateDeviceActionConfig
+  | SendEmailActionConfig
+  | DelayActionConfig
+  | LogActionConfig;
+
+export interface AutomationConditionGroup {
+  logic: "AND" | "OR";
+  conditions: DeviceDataCondition[];
+  deviceId: string;
+}
+
+export interface Automation {
+  pk: string;
+  sk: string;
+  entityType: "AUTOMATION";
+  workspaceId: string;
+  automationId: string;
+  name: string;
+  description?: string;
+  status: AutomationStatus;
+  triggerType: AutomationTriggerType;
+  triggerConfig: AutomationTriggerConfig;
+  conditionGroups?: AutomationConditionGroup[];
+  conditionLogic?: "AND" | "OR";
+  actions: AutomationActionConfig[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAutomationPayload {
+  name: string;
+  description?: string;
+  triggerType: AutomationTriggerType;
+  triggerConfig: AutomationTriggerConfig;
+  actions: AutomationActionConfig[];
+}
+
+export interface UpdateAutomationPayload {
+  name?: string;
+  description?: string;
+  status?: AutomationStatus;
+  triggerType?: AutomationTriggerType;
+  triggerConfig?: AutomationTriggerConfig;
+  actions?: AutomationActionConfig[];
+}
+
+// ---- List automations ----
+
+export async function apiListAutomations(token: string, workspaceSlug: string): Promise<{ automations: Automation[] }> {
+  const res = await fetch(`${API_BASE}/automations`, {
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-workspace-alias": workspaceSlug,
+    },
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || "Failed to load automations");
+  }
+  return res.json() as Promise<{ automations: Automation[] }>;
+}
+
+// ---- Get automation ----
+
+export async function apiGetAutomation(token: string, workspaceSlug: string, automationId: string): Promise<Automation> {
+  const res = await fetch(`${API_BASE}/automations/${automationId}`, {
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-workspace-alias": workspaceSlug,
+    },
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || "Failed to load automation");
+  }
+  return res.json() as Promise<Automation>;
+}
+
+// ---- Create automation ----
+
+export async function apiCreateAutomation(token: string, workspaceSlug: string, payload: CreateAutomationPayload): Promise<{ automationId: string }> {
+  const res = await fetch(`${API_BASE}/automations`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-workspace-alias": workspaceSlug,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || "Failed to create automation");
+  }
+  return res.json() as Promise<{ automationId: string }>;
+}
+
+// ---- Update automation ----
+
+export async function apiUpdateAutomation(token: string, workspaceSlug: string, automationId: string, payload: UpdateAutomationPayload): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/automations/${automationId}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-workspace-alias": workspaceSlug,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || "Failed to update automation");
+  }
+  return res.json() as Promise<{ ok: boolean }>;
+}
+
+// ---- Delete automation ----
+
+export async function apiDeleteAutomation(token: string, workspaceSlug: string, automationId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/automations/${automationId}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "x-workspace-alias": workspaceSlug,
+    },
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || "Failed to delete automation");
+  }
+  return res.json() as Promise<{ ok: boolean }>;
 }

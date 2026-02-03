@@ -1,12 +1,16 @@
 "use client";
-import { useState } from "react";
+
+import { useState, useCallback, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
+import useSWR from "swr";
+import useSWRMutation from "swr/mutation";
 import {
-  ArrowLeft, Plus, Zap, Trash2, Bell, Clock, Thermometer,
-  Droplet, Power, Activity, Settings, Wifi,
+  ArrowLeft, Plus, Zap, Trash2, Bell, Clock,
+  Activity, Settings, Wifi,
   Webhook, Mail, Database, ArrowRight,
   GitBranch, Save, X, ChevronDown, ChevronUp,
-  Shuffle, Link2, Sparkles, Info, GripVertical
+  Shuffle, Link2, Sparkles, Info, GripVertical, Loader2, AlertCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -16,292 +20,510 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { mockWorkspaces } from "@/data/mockData";
+import { useAuth } from "@/contexts/AuthContext";
+import {
+  apiListDevices,
+  apiGetDevice,
+  apiCreateAutomation,
+  type DeviceDetail,
+  type CreateAutomationPayload,
+  type AutomationTriggerConfig,
+  type AutomationActionConfig,
+  type DeviceDataTriggerConfig,
+  type DeviceStatusTriggerConfig,
+  type ScheduleTriggerConfig,
+} from "@/lib/api";
 
 // Types
 interface RuleTrigger {
   id: string;
-  type: 'device_data_stream' | 'device_sensor' | 'device_state' | 'schedule' | 'webhook' | 'device_event';
+  type: "device_data" | "device_status" | "schedule";
   deviceId?: string;
   deviceName?: string;
-  sensorField?: string;
+  field?: string;
   condition?: string;
   value?: number | string | boolean;
-  value2?: number | string;
-  schedule?: string;
-  eventType?: string;
-  jsonPath?: string;
-  dataFilter?: 'all' | 'changed_only';
+  status?: "online" | "offline";
+  cron?: string;
 }
 
 interface TriggerGroup {
   id: string;
   triggers: RuleTrigger[];
-  logicOperator: 'AND' | 'OR';
+  logicOperator: "AND" | "OR";
 }
 
 interface RuleAction {
   id: string;
-  type: 'device_control' | 'notification' | 'webhook' | 'email' | 'delay' | 'log';
-  deviceId?: string;
-  deviceName?: string;
-  command?: string;
-  value?: any;
-  message?: string;
+  type: "send_webhook" | "send_email" | "update_device" | "delay" | "log";
+  // Webhook
   webhookUrl?: string;
+  method?: "GET" | "POST" | "PUT";
+  // Email
   recipient?: string;
+  subject?: string;
+  message?: string;
+  // Update device
+  targetDeviceId?: string;
+  targetDeviceName?: string;
+  targetField?: string;
+  targetValue?: string | number | boolean;
+  // Delay
   delaySeconds?: number;
 }
 
 // Trigger Templates
 const TRIGGER_TYPES = [
   {
-    value: 'device_data_stream',
-    label: 'Device Data Stream',
+    value: "device_data",
+    label: "Device Data",
     icon: Database,
-    description: 'Listen to real-time device data',
-    color: 'from-cyan-500 to-blue-500'
+    description: "When device field meets condition",
+    color: "from-cyan-500 to-blue-500",
   },
   {
-    value: 'device_sensor',
-    label: 'Device Sensor Value',
-    icon: Thermometer,
-    description: 'When sensor value meets condition',
-    color: 'from-red-500 to-orange-500'
-  },
-  {
-    value: 'device_state',
-    label: 'Device Status',
+    value: "device_status",
+    label: "Device Status",
     icon: Wifi,
-    description: 'When device goes online/offline',
-    color: 'from-green-500 to-emerald-500'
+    description: "When device goes online/offline",
+    color: "from-green-500 to-emerald-500",
   },
   {
-    value: 'device_event',
-    label: 'Device Event',
-    icon: Activity,
-    description: 'On specific device events',
-    color: 'from-purple-500 to-pink-500'
-  },
-  {
-    value: 'schedule',
-    label: 'Time Schedule',
+    value: "schedule",
+    label: "Schedule",
     icon: Clock,
-    description: 'At specific times/dates',
-    color: 'from-indigo-500 to-blue-500'
-  },
-  {
-    value: 'webhook',
-    label: 'Webhook Trigger',
-    icon: Webhook,
-    description: 'From external webhook call',
-    color: 'from-pink-500 to-rose-500'
+    description: "At specific times (cron)",
+    color: "from-indigo-500 to-blue-500",
   },
 ];
 
 const ACTION_TYPES = [
   {
-    value: 'device_control',
-    label: 'Control Device',
-    icon: Zap,
-    description: 'Turn on/off or control device',
-    color: 'from-blue-500 to-cyan-500'
-  },
-  {
-    value: 'notification',
-    label: 'Send Notification',
-    icon: Bell,
-    description: 'Push notification to users',
-    color: 'from-orange-500 to-amber-500'
-  },
-  {
-    value: 'webhook',
-    label: 'Call Webhook',
+    value: "send_webhook",
+    label: "Call Webhook",
     icon: Webhook,
-    description: 'POST to external URL',
-    color: 'from-purple-500 to-indigo-500'
+    description: "POST to external URL",
+    color: "from-purple-500 to-indigo-500",
   },
   {
-    value: 'email',
-    label: 'Send Email',
+    value: "send_email",
+    label: "Send Email",
     icon: Mail,
-    description: 'Email notification',
-    color: 'from-green-500 to-teal-500'
+    description: "Email notification",
+    color: "from-green-500 to-teal-500",
   },
   {
-    value: 'delay',
-    label: 'Add Delay',
+    value: "update_device",
+    label: "Update Device",
+    icon: Settings,
+    description: "Set device field value",
+    color: "from-blue-500 to-cyan-500",
+  },
+  {
+    value: "delay",
+    label: "Add Delay",
     icon: Clock,
-    description: 'Wait before next action',
-    color: 'from-gray-500 to-slate-500'
+    description: "Wait before next action",
+    color: "from-gray-500 to-slate-500",
   },
   {
-    value: 'log',
-    label: 'Log Event',
+    value: "log",
+    label: "Log Event",
     icon: Database,
-    description: 'Record to event log',
-    color: 'from-yellow-500 to-orange-500'
+    description: "Record to event log",
+    color: "from-yellow-500 to-orange-500",
   },
 ];
 
-const SENSOR_CONDITIONS = [
-  { value: 'equals', label: 'Equals (=)', symbol: '=' },
-  { value: 'not_equals', label: 'Not Equals (!=)', symbol: '!=' },
-  { value: 'greater_than', label: 'Greater Than (>)', symbol: '>' },
-  { value: 'greater_or_equal', label: 'Greater or Equal (>=)', symbol: '>=' },
-  { value: 'less_than', label: 'Less Than (<)', symbol: '<' },
-  { value: 'less_or_equal', label: 'Less or Equal (<=)', symbol: '<=' },
-  { value: 'between', label: 'Between', symbol: '<>' },
-  { value: 'changed', label: 'Value Changed', symbol: '~' },
+const CONDITION_OPERATORS = [
+  { value: "equals", label: "Equals (=)", symbol: "=" },
+  { value: "not_equals", label: "Not Equals (!=)", symbol: "!=" },
+  { value: "greater_than", label: "Greater Than (>)", symbol: ">" },
+  { value: "greater_than_or_equal", label: "Greater or Equal (>=)", symbol: ">=" },
+  { value: "less_than", label: "Less Than (<)", symbol: "<" },
+  { value: "less_than_or_equal", label: "Less or Equal (<=)", symbol: "<=" },
 ];
 
-const DEVICE_STATE_CONDITIONS = [
-  { value: 'online', label: 'Comes Online' },
-  { value: 'offline', label: 'Goes Offline' },
-  { value: 'state_changed', label: 'Status Changed' },
-];
+// SWR fetchers
+async function devicesFetcher([, token, workspaceSlug]: [string, string, string]) {
+  return apiListDevices(token, workspaceSlug);
+}
+
+async function createAutomationFetcher(
+  _key: string,
+  { arg }: { arg: { token: string; workspaceSlug: string; payload: CreateAutomationPayload } }
+) {
+  return apiCreateAutomation(arg.token, arg.workspaceSlug, arg.payload);
+}
 
 export function CreateRulePage() {
   const params = useParams();
   const router = useRouter();
   const workspaceSlug = params?.workspace as string;
-  const workspace = mockWorkspaces.find(w => w.slug === workspaceSlug || w.id === workspaceSlug);
+  const { token, isLoading: authLoading } = useAuth();
 
-  const getDeviceForTrigger = (trigger: RuleTrigger) =>
-    workspace?.devices.find(d => d.id === trigger.deviceId);
+  // Fetch devices list
+  const { data: devicesData, isLoading: devicesLoading } = useSWR(
+    token && workspaceSlug ? ["devices", token, workspaceSlug] : null,
+    devicesFetcher
+  );
+  const devices = devicesData?.devices ?? [];
 
-  const getFieldMappingsForTrigger = (trigger: RuleTrigger) => {
-    const device = getDeviceForTrigger(trigger);
-    return device?.fieldMappings ?? [];
-  };
+  // Cache for device details (with field mappings)
+  const [deviceDetailsCache, setDeviceDetailsCache] = useState<Record<string, DeviceDetail>>({});
+  const [loadingDeviceIds, setLoadingDeviceIds] = useState<Set<string>>(new Set());
 
-  const [ruleName, setRuleName] = useState('');
-  const [ruleDescription, setRuleDescription] = useState('');
-  const [triggerGroups, setTriggerGroups] = useState<TriggerGroup[]>([
-    {
-      id: 'group-1',
-      triggers: [],
-      logicOperator: 'AND'
+  // Fetch device details when needed
+  const fetchDeviceDetails = useCallback(async (deviceId: string) => {
+    if (!token || !workspaceSlug || deviceDetailsCache[deviceId] || loadingDeviceIds.has(deviceId)) {
+      return;
     }
+    setLoadingDeviceIds((prev) => new Set(prev).add(deviceId));
+    try {
+      const details = await apiGetDevice(token, workspaceSlug, deviceId);
+      setDeviceDetailsCache((prev) => ({ ...prev, [deviceId]: details }));
+    } catch (error) {
+      console.error("Failed to fetch device details:", error);
+    } finally {
+      setLoadingDeviceIds((prev) => {
+        const next = new Set(prev);
+        next.delete(deviceId);
+        return next;
+      });
+    }
+  }, [token, workspaceSlug, deviceDetailsCache, loadingDeviceIds]);
+
+  // Create mutation
+  const { trigger: triggerCreate, isMutating: isCreating } = useSWRMutation(
+    "create-automation",
+    createAutomationFetcher
+  );
+
+  const [ruleName, setRuleName] = useState("");
+  const [ruleDescription, setRuleDescription] = useState("");
+  const [triggerGroups, setTriggerGroups] = useState<TriggerGroup[]>([
+    { id: "group-1", triggers: [], logicOperator: "AND" },
   ]);
-  const [groupsLogicOperator, setGroupsLogicOperator] = useState<'AND' | 'OR'>('OR');
+  const [groupsLogicOperator, setGroupsLogicOperator] = useState<"AND" | "OR">("OR");
   const [actions, setActions] = useState<RuleAction[]>([]);
   const [showTriggerTypeSelector, setShowTriggerTypeSelector] = useState<string | null>(null);
   const [showActionTypeSelector, setShowActionTypeSelector] = useState(false);
 
-  if (!workspace) {
-    return <div className="text-center py-12"><p className="text-gray-600">Workspace not found</p></div>;
-  }
+  // Get field mappings for a device
+  const getFieldMappings = useCallback((deviceId: string | undefined) => {
+    if (!deviceId) return [];
+    const details = deviceDetailsCache[deviceId];
+    return details?.fieldMappings ?? [];
+  }, [deviceDetailsCache]);
+
+  // Detect potential infinite loops - collect all monitored device+field combinations
+  const getMonitoredFields = useCallback(() => {
+    const monitored: Array<{ deviceId: string; field: string; deviceName?: string }> = [];
+    for (const group of triggerGroups) {
+      for (const trigger of group.triggers) {
+        if (trigger.type === "device_data" && trigger.deviceId && trigger.field) {
+          monitored.push({
+            deviceId: trigger.deviceId,
+            field: trigger.field,
+            deviceName: trigger.deviceName,
+          });
+        }
+      }
+    }
+    return monitored;
+  }, [triggerGroups]);
+
+  // Check if an action would cause a potential loop
+  const checkActionLoop = useCallback((action: RuleAction): { hasLoop: boolean; message: string } | null => {
+    if (action.type !== "update_device" || !action.targetDeviceId || !action.targetField) {
+      return null;
+    }
+
+    const monitored = getMonitoredFields();
+    const conflict = monitored.find(
+      (m) => m.deviceId === action.targetDeviceId && m.field === action.targetField
+    );
+
+    if (conflict) {
+      const deviceName = conflict.deviceName || "this device";
+      return {
+        hasLoop: true,
+        message: `Warning: This action updates "${action.targetField}" on ${deviceName}, which is also being monitored by a trigger. This may cause an infinite loop.`,
+      };
+    }
+
+    return null;
+  }, [getMonitoredFields]);
+
+  // Get all loop warnings for the rule
+  const getLoopWarnings = useCallback(() => {
+    const warnings: string[] = [];
+    for (const action of actions) {
+      const loopCheck = checkActionLoop(action);
+      if (loopCheck?.hasLoop) {
+        warnings.push(loopCheck.message);
+      }
+    }
+    return warnings;
+  }, [actions, checkActionLoop]);
 
   // Trigger Group Management
   const addTriggerGroup = () => {
     const newGroup: TriggerGroup = {
       id: `group-${Date.now()}`,
       triggers: [],
-      logicOperator: 'AND'
+      logicOperator: "AND",
     };
     setTriggerGroups([...triggerGroups, newGroup]);
   };
 
   const removeTriggerGroup = (groupId: string) => {
-    setTriggerGroups(triggerGroups.filter(g => g.id !== groupId));
+    if (triggerGroups.length <= 1) return;
+    setTriggerGroups(triggerGroups.filter((g) => g.id !== groupId));
   };
 
-  const updateGroupOperator = (groupId: string, operator: 'AND' | 'OR') => {
-    setTriggerGroups(triggerGroups.map(g =>
-      g.id === groupId ? { ...g, logicOperator: operator } : g
-    ));
+  const updateGroupOperator = (groupId: string, operator: "AND" | "OR") => {
+    setTriggerGroups(triggerGroups.map((g) => (g.id === groupId ? { ...g, logicOperator: operator } : g)));
   };
 
   // Trigger Management
   const addTrigger = (groupId: string, type: string) => {
     const newTrigger: RuleTrigger = {
       id: `trigger-${Date.now()}`,
-      type: type as RuleTrigger['type'],
-      condition: type === 'device_sensor' ? 'greater_than' : 'online',
+      type: type as RuleTrigger["type"],
+      condition: type === "device_data" ? "greater_than" : undefined,
+      status: type === "device_status" ? "offline" : undefined,
     };
-    setTriggerGroups(triggerGroups.map(g =>
+    setTriggerGroups(triggerGroups.map((g) =>
       g.id === groupId ? { ...g, triggers: [...g.triggers, newTrigger] } : g
     ));
     setShowTriggerTypeSelector(null);
   };
 
   const removeTrigger = (groupId: string, triggerId: string) => {
-    setTriggerGroups(triggerGroups.map(g =>
-      g.id === groupId ? { ...g, triggers: g.triggers.filter(t => t.id !== triggerId) } : g
+    setTriggerGroups(triggerGroups.map((g) =>
+      g.id === groupId ? { ...g, triggers: g.triggers.filter((t) => t.id !== triggerId) } : g
     ));
   };
 
   const updateTrigger = (groupId: string, triggerId: string, updates: Partial<RuleTrigger>) => {
-    setTriggerGroups(triggerGroups.map(g =>
-      g.id === groupId ? {
-        ...g,
-        triggers: g.triggers.map(t => t.id === triggerId ? { ...t, ...updates } : t)
-      } : g
+    setTriggerGroups(triggerGroups.map((g) =>
+      g.id === groupId
+        ? { ...g, triggers: g.triggers.map((t) => (t.id === triggerId ? { ...t, ...updates } : t)) }
+        : g
     ));
+
+    // Fetch device details if deviceId is set
+    if (updates.deviceId && !deviceDetailsCache[updates.deviceId]) {
+      fetchDeviceDetails(updates.deviceId);
+    }
   };
 
   // Action Management
   const addAction = (type: string) => {
     const newAction: RuleAction = {
       id: `action-${Date.now()}`,
-      type: type as RuleAction['type'],
+      type: type as RuleAction["type"],
     };
     setActions([...actions, newAction]);
     setShowActionTypeSelector(false);
   };
 
   const removeAction = (actionId: string) => {
-    setActions(actions.filter(a => a.id !== actionId));
+    setActions(actions.filter((a) => a.id !== actionId));
   };
 
   const updateAction = (actionId: string, updates: Partial<RuleAction>) => {
-    setActions(actions.map(a => a.id === actionId ? { ...a, ...updates } : a));
+    setActions(actions.map((a) => (a.id === actionId ? { ...a, ...updates } : a)));
+
+    // Fetch device details if targetDeviceId is set
+    if (updates.targetDeviceId && !deviceDetailsCache[updates.targetDeviceId]) {
+      fetchDeviceDetails(updates.targetDeviceId);
+    }
   };
 
-  const moveAction = (index: number, direction: 'up' | 'down') => {
+  const moveAction = (index: number, direction: "up" | "down") => {
     const newActions = [...actions];
-    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    const newIndex = direction === "up" ? index - 1 : index + 1;
     if (newIndex >= 0 && newIndex < actions.length) {
       [newActions[index], newActions[newIndex]] = [newActions[newIndex], newActions[index]];
       setActions(newActions);
     }
   };
 
+  // Build API payload from form data
+  const buildTriggerConfig = useCallback((): { config: AutomationTriggerConfig; type: string } | null => {
+    // Find first group with triggers
+    const activeGroup = triggerGroups.find((g) => g.triggers.length > 0);
+    if (!activeGroup) return null;
+
+    const firstTrigger = activeGroup.triggers[0];
+
+    if (firstTrigger.type === "device_data") {
+      // Collect all device_data conditions from all groups
+      const allConditions: { field: string; operator: string; value: unknown }[] = [];
+
+      for (const group of triggerGroups) {
+        for (const t of group.triggers) {
+          if (t.type === "device_data" && t.deviceId && t.field && t.condition) {
+            allConditions.push({
+              field: t.field,
+              operator: t.condition,
+              value: t.value,
+            });
+          }
+        }
+      }
+
+      if (allConditions.length === 0) return null;
+
+      const config: DeviceDataTriggerConfig = {
+        type: "device_data",
+        deviceId: firstTrigger.deviceId!,
+        logic: activeGroup.logicOperator,
+        conditions: allConditions.map((c) => ({
+          field: c.field,
+          operator: c.operator as DeviceDataTriggerConfig["conditions"][0]["operator"],
+          value: c.value,
+        })),
+      };
+      return { config, type: "device_data" };
+    }
+
+    if (firstTrigger.type === "device_status") {
+      if (!firstTrigger.deviceId || !firstTrigger.status) return null;
+      const config: DeviceStatusTriggerConfig = {
+        type: "device_status",
+        deviceId: firstTrigger.deviceId,
+        status: firstTrigger.status,
+      };
+      return { config, type: "device_status" };
+    }
+
+    if (firstTrigger.type === "schedule") {
+      if (!firstTrigger.cron) return null;
+      const config: ScheduleTriggerConfig = {
+        type: "schedule",
+        cron: firstTrigger.cron,
+      };
+      return { config, type: "schedule" };
+    }
+
+    return null;
+  }, [triggerGroups]);
+
+  const buildActions = useCallback((): AutomationActionConfig[] => {
+    return actions
+      .map((a): AutomationActionConfig | null => {
+        if (a.type === "send_webhook" && a.webhookUrl) {
+          return {
+            type: "send_webhook",
+            url: a.webhookUrl,
+            method: a.method || "POST",
+          };
+        }
+        if (a.type === "send_email" && a.recipient && a.subject) {
+          return {
+            type: "send_email",
+            to: a.recipient,
+            subject: a.subject,
+            body: a.message || "",
+          };
+        }
+        if (a.type === "update_device" && a.targetDeviceId && a.targetField) {
+          return {
+            type: "update_device",
+            targetDeviceId: a.targetDeviceId,
+            field: a.targetField,
+            value: a.targetValue,
+          };
+        }
+        if (a.type === "delay" && a.delaySeconds) {
+          return {
+            type: "delay",
+            delaySeconds: a.delaySeconds,
+          };
+        }
+        if (a.type === "log" && a.message) {
+          return {
+            type: "log",
+            message: a.message,
+          };
+        }
+        return null;
+      })
+      .filter((a): a is AutomationActionConfig => a !== null);
+  }, [actions]);
+
   // Save Rule
-  const handleSaveRule = () => {
-    if (!ruleName) {
-      toast.error('Please enter a rule name');
+  const handleSaveRule = async () => {
+    if (!token) {
+      toast.error("Not authenticated");
       return;
     }
 
-    const hasValidTriggers = triggerGroups.some(g => g.triggers.length > 0);
-    if (!hasValidTriggers) {
-      toast.error('Please add at least one trigger');
+    if (!ruleName.trim()) {
+      toast.error("Please enter a rule name");
+      return;
+    }
+
+    const hasTriggers = triggerGroups.some((g) => g.triggers.length > 0);
+    if (!hasTriggers) {
+      toast.error("Please add at least one trigger");
       return;
     }
 
     if (actions.length === 0) {
-      toast.error('Please add at least one action');
+      toast.error("Please add at least one action");
       return;
     }
 
-    toast.success('Rule created successfully!');
-    router.push(`/${workspaceSlug}/automations`);
+    const triggerResult = buildTriggerConfig();
+    if (!triggerResult) {
+      toast.error("Please complete trigger configuration");
+      return;
+    }
+
+    const actionConfigs = buildActions();
+    if (actionConfigs.length === 0) {
+      toast.error("Please complete action configuration");
+      return;
+    }
+
+    const payload: CreateAutomationPayload = {
+      name: ruleName.trim(),
+      description: ruleDescription.trim() || undefined,
+      triggerType: triggerResult.type as CreateAutomationPayload["triggerType"],
+      triggerConfig: triggerResult.config,
+      actions: actionConfigs,
+    };
+
+    try {
+      await triggerCreate({ token, workspaceSlug, payload });
+      toast.success("Automation created successfully!");
+      router.push(`/${workspaceSlug}/automations`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create automation");
+    }
   };
 
   // Render Trigger Card
   const renderTriggerCard = (groupId: string, trigger: RuleTrigger) => {
-    const triggerType = TRIGGER_TYPES.find(t => t.value === trigger.type);
+    const triggerType = TRIGGER_TYPES.find((t) => t.value === trigger.type);
     const Icon = triggerType?.icon || Activity;
+    const fieldMappings = getFieldMappings(trigger.deviceId);
+    const isLoadingFields = trigger.deviceId ? loadingDeviceIds.has(trigger.deviceId) : false;
 
     return (
       <Card key={trigger.id} className="border-2 border-gray-200 hover:border-blue-300 transition-all">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
             <div className="flex items-center gap-2 shrink-0">
-              <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${triggerType?.color} flex items-center justify-center shadow-md`}>
+              <div
+                className={`w-10 h-10 rounded-xl bg-gradient-to-br ${triggerType?.color} flex items-center justify-center shadow-md`}
+              >
                 <Icon className="w-5 h-5 text-white" />
               </div>
               <GripVertical className="w-4 h-4 text-gray-400" />
@@ -322,29 +544,20 @@ export function CreateRulePage() {
                 </Button>
               </div>
 
-              {/* Device Data Stream Trigger */}
-              {trigger.type === 'device_data_stream' && (
+              {/* Device Data Trigger */}
+              {trigger.type === "device_data" && (
                 <div className="space-y-3">
-                  <div className="p-3 bg-gradient-to-r from-cyan-50 to-blue-50 rounded-lg border border-cyan-200">
-                    <p className="text-xs font-semibold text-cyan-900 mb-1">
-                      Real-Time Data Listener
-                    </p>
-                    <p className="text-xs text-cyan-700">
-                      This trigger activates when device sends data matching your condition.
-                    </p>
-                  </div>
-
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label className="text-xs">Device</Label>
                       <Select
-                        value={trigger.deviceId || ''}
+                        value={trigger.deviceId || ""}
                         onValueChange={(value) => {
-                          const device = workspace.devices.find(d => d.id === value);
+                          const device = devices.find((d) => d.deviceId === value);
                           updateTrigger(groupId, trigger.id, {
                             deviceId: value,
                             deviceName: device?.name,
-                            sensorField: '',
+                            field: "",
                           });
                         }}
                       >
@@ -352,8 +565,8 @@ export function CreateRulePage() {
                           <SelectValue placeholder="Select device" />
                         </SelectTrigger>
                         <SelectContent>
-                          {workspace.devices.map(device => (
-                            <SelectItem key={device.id} value={device.id}>
+                          {devices.map((device) => (
+                            <SelectItem key={device.deviceId} value={device.deviceId}>
                               {device.name}
                             </SelectItem>
                           ))}
@@ -361,224 +574,177 @@ export function CreateRulePage() {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-xs">Listen Mode</Label>
-                      <Select
-                        value={trigger.dataFilter || 'all'}
-                        onValueChange={(value: 'all' | 'changed_only') =>
-                          updateTrigger(groupId, trigger.id, { dataFilter: value })
-                        }
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Every Data Push</SelectItem>
-                          <SelectItem value="changed_only">Only When Value Changes</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  {trigger.deviceId && (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="space-y-2">
-                          <Label className="text-xs">Field</Label>
-                          <Select
-                            value={trigger.sensorField || ''}
-                            onValueChange={(value) => updateTrigger(groupId, trigger.id, { sensorField: value })}
-                          >
-                            <SelectTrigger className="h-9">
-                              <SelectValue placeholder="Select field" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {getFieldMappingsForTrigger(trigger).length === 0 && (
-                                <SelectItem value="__no_fields__" disabled>
-                                  No fields configured for this device
-                                </SelectItem>
-                              )}
-                              {getFieldMappingsForTrigger(trigger).map((field) => (
-                                <SelectItem key={field.fieldKey} value={field.fieldKey}>
-                                  {field.label}
-                                  <span className="ml-1 text-[10px] uppercase text-gray-500">
-                                    • {field.type || 'numeric'}
-                                  </span>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                      <Label className="text-xs">Field</Label>
+                      {isLoadingFields ? (
+                        <div className="h-9 flex items-center gap-2 px-3 border rounded-md bg-gray-50">
+                          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                          <span className="text-xs text-gray-500">Loading fields...</span>
                         </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Condition</Label>
-                          <Select
-                            value={trigger.condition || ''}
-                            onValueChange={(value) => updateTrigger(groupId, trigger.id, { condition: value })}
-                          >
-                            <SelectTrigger className="h-9">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {SENSOR_CONDITIONS.map(cond => (
-                                <SelectItem key={cond.value} value={cond.value}>
-                                  {cond.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs">Value</Label>
-                          <Input
-                            type="number"
-                            placeholder="e.g., 30"
-                            value={trigger.value as number || ''}
-                            onChange={(e) => updateTrigger(groupId, trigger.id, { value: parseFloat(e.target.value) })}
-                            className="h-9"
-                          />
-                        </div>
-                      </div>
-
-                      {trigger.sensorField && trigger.condition && (
-                        <div className="p-2 bg-cyan-50 border border-cyan-200 rounded-lg">
-                          <p className="text-xs text-cyan-900">
-                            <span className="font-semibold">Preview:</span> When{' '}
-                            <span className="font-mono bg-cyan-100 px-1 py-0.5 rounded">
-                              {trigger.sensorField}
-                            </span>
-                            {' '}{SENSOR_CONDITIONS.find(c => c.value === trigger.condition)?.symbol || ''}{' '}
-                            <span className="font-semibold">{trigger.value}</span>
-                          </p>
-                        </div>
+                      ) : fieldMappings.length > 0 ? (
+                        <Select
+                          value={trigger.field || ""}
+                          onValueChange={(value) => updateTrigger(groupId, trigger.id, { field: value })}
+                        >
+                          <SelectTrigger className="h-9">
+                            <SelectValue placeholder="Select field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {fieldMappings.map((fm) => (
+                              <SelectItem key={fm.sourceField} value={fm.sourceField}>
+                                {fm.displayLabel}
+                                <span className="ml-2 text-[10px] text-gray-500 uppercase">
+                                  ({fm.dataType})
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          placeholder={trigger.deviceId ? "No field mappings - enter field key" : "Select device first"}
+                          value={trigger.field || ""}
+                          onChange={(e) => updateTrigger(groupId, trigger.id, { field: e.target.value })}
+                          className="h-9 font-mono text-sm"
+                          disabled={!trigger.deviceId}
+                        />
                       )}
                     </div>
-                  )}
-                </div>
-              )}
+                  </div>
+                  {(() => {
+                    // Get field type from field mappings
+                    const selectedFieldMapping = fieldMappings.find((fm) => fm.sourceField === trigger.field);
+                    const fieldType = selectedFieldMapping?.dataType || "number";
+                    const isBooleanField = fieldType === "boolean";
+                    const isNumberField = fieldType === "number";
 
-              {/* Device Sensor Trigger */}
-              {trigger.type === 'device_sensor' && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label className="text-xs">Device</Label>
-                      <Select
-                        value={trigger.deviceId || ''}
-                        onValueChange={(value) => {
-                          const device = workspace.devices.find(d => d.id === value);
-                          updateTrigger(groupId, trigger.id, {
-                            deviceId: value,
-                            deviceName: device?.name,
-                            sensorField: '',
-                          });
-                        }}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder="Select device" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {workspace.devices.map(device => (
-                            <SelectItem key={device.id} value={device.id}>
-                              {device.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Sensor Field</Label>
-                      <Select
-                        value={trigger.sensorField || ''}
-                        onValueChange={(value) => updateTrigger(groupId, trigger.id, { sensorField: value })}
-                        disabled={!trigger.deviceId}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder={trigger.deviceId ? 'Select field' : 'Select device first'} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {getFieldMappingsForTrigger(trigger).length === 0 && (
-                            <SelectItem value="__no_fields__" disabled>
-                              No fields configured for this device
-                            </SelectItem>
+                    // For boolean fields, show simplified condition options
+                    const booleanConditions = [
+                      { value: "equals", label: "Is", symbol: "=" },
+                      { value: "not_equals", label: "Is Not", symbol: "!=" },
+                    ];
+
+                    return (
+                      <>
+                        <div className={`grid gap-3 ${isBooleanField ? "grid-cols-1" : "grid-cols-2"}`}>
+                          {!isBooleanField && (
+                            <div className="space-y-2">
+                              <Label className="text-xs">Condition</Label>
+                              <Select
+                                value={trigger.condition || ""}
+                                onValueChange={(value) => updateTrigger(groupId, trigger.id, { condition: value })}
+                              >
+                                <SelectTrigger className="h-9">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {CONDITION_OPERATORS.map((op) => (
+                                    <SelectItem key={op.value} value={op.value}>
+                                      {op.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
                           )}
-                          {getFieldMappingsForTrigger(trigger).map((field) => (
-                            <SelectItem key={field.fieldKey} value={field.fieldKey}>
-                              {field.label}
-                              <span className="ml-1 text-[10px] uppercase text-gray-500">
-                                • {field.type || 'numeric'}
+                          <div className="space-y-2">
+                            <Label className="text-xs">Value</Label>
+                            {isBooleanField ? (
+                              <div className="flex items-center gap-4 h-9">
+                                <div className="flex items-center gap-3 p-2 border rounded-lg bg-gray-50 flex-1">
+                                  <span className={`text-sm font-medium ${trigger.value === false ? "text-gray-900" : "text-gray-400"}`}>
+                                    Off
+                                  </span>
+                                  <Switch
+                                    checked={trigger.value === true}
+                                    onCheckedChange={(checked) => {
+                                      updateTrigger(groupId, trigger.id, {
+                                        value: checked,
+                                        condition: "equals",
+                                      });
+                                    }}
+                                  />
+                                  <span className={`text-sm font-medium ${trigger.value === true ? "text-gray-900" : "text-gray-400"}`}>
+                                    On
+                                  </span>
+                                </div>
+                                <Select
+                                  value={trigger.condition || "equals"}
+                                  onValueChange={(value) => updateTrigger(groupId, trigger.id, { condition: value })}
+                                >
+                                  <SelectTrigger className="h-9 w-28">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {booleanConditions.map((op) => (
+                                      <SelectItem key={op.value} value={op.value}>
+                                        {op.label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            ) : isNumberField ? (
+                              <Input
+                                type="number"
+                                placeholder="e.g., 30"
+                                value={trigger.value as number ?? ""}
+                                onChange={(e) => updateTrigger(groupId, trigger.id, { value: parseFloat(e.target.value) })}
+                                className="h-9"
+                              />
+                            ) : (
+                              <Input
+                                type="text"
+                                placeholder="Enter value"
+                                value={trigger.value?.toString() || ""}
+                                onChange={(e) => updateTrigger(groupId, trigger.id, { value: e.target.value })}
+                                className="h-9"
+                              />
+                            )}
+                          </div>
+                        </div>
+                        {trigger.deviceId && trigger.field && trigger.condition && (
+                          <div className="p-2 bg-cyan-50 border border-cyan-200 rounded-lg">
+                            <p className="text-xs text-cyan-900">
+                              <span className="font-semibold">Preview:</span> When{" "}
+                              <span className="font-mono bg-cyan-100 px-1 py-0.5 rounded">{trigger.field}</span>{" "}
+                              {isBooleanField
+                                ? `${trigger.condition === "not_equals" ? "is not" : "is"} `
+                                : `${CONDITION_OPERATORS.find((c) => c.value === trigger.condition)?.symbol || ""} `}
+                              <span className="font-semibold">
+                                {isBooleanField
+                                  ? trigger.value === true
+                                    ? "ON (true)"
+                                    : "OFF (false)"
+                                  : String(trigger.value)}
                               </span>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label className="text-xs">Condition</Label>
-                      <Select
-                        value={trigger.condition || ''}
-                        onValueChange={(value) => updateTrigger(groupId, trigger.id, { condition: value })}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {SENSOR_CONDITIONS.map(cond => (
-                            <SelectItem key={cond.value} value={cond.value}>
-                              {cond.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Value</Label>
-                      <Input
-                        type="number"
-                        placeholder="e.g., 30"
-                        value={trigger.value as number || ''}
-                        onChange={(e) => updateTrigger(groupId, trigger.id, { value: parseFloat(e.target.value) })}
-                        className="h-9"
-                      />
-                    </div>
-                  </div>
-                  {trigger.deviceId && trigger.sensorField && (
-                    <div className="p-2 bg-blue-50 border border-blue-200 rounded-lg">
-                      <p className="text-xs text-blue-800">
-                        <span className="font-semibold">Preview:</span> When{' '}
-                        <span className="font-mono bg-blue-100 px-1 py-0.5 rounded">
-                          {trigger.sensorField}
-                        </span>
-                        {' '}{SENSOR_CONDITIONS.find(c => c.value === trigger.condition)?.symbol || ''}{' '}
-                        <span className="font-semibold">{trigger.value}</span>
-                      </p>
-                    </div>
-                  )}
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
-              {/* Device State Trigger */}
-              {trigger.type === 'device_state' && (
+              {/* Device Status Trigger */}
+              {trigger.type === "device_status" && (
                 <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label className="text-xs">Device</Label>
                       <Select
-                        value={trigger.deviceId || ''}
+                        value={trigger.deviceId || ""}
                         onValueChange={(value) => {
-                          const device = workspace.devices.find(d => d.id === value);
-                          updateTrigger(groupId, trigger.id, {
-                            deviceId: value,
-                            deviceName: device?.name
-                          });
+                          const device = devices.find((d) => d.deviceId === value);
+                          updateTrigger(groupId, trigger.id, { deviceId: value, deviceName: device?.name });
                         }}
                       >
                         <SelectTrigger className="h-9">
                           <SelectValue placeholder="Select device" />
                         </SelectTrigger>
                         <SelectContent>
-                          {workspace.devices.map(device => (
-                            <SelectItem key={device.id} value={device.id}>
+                          {devices.map((device) => (
+                            <SelectItem key={device.deviceId} value={device.deviceId}>
                               {device.name}
                             </SelectItem>
                           ))}
@@ -586,20 +752,17 @@ export function CreateRulePage() {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label className="text-xs">State Condition</Label>
+                      <Label className="text-xs">Status Change</Label>
                       <Select
-                        value={trigger.condition || ''}
-                        onValueChange={(value) => updateTrigger(groupId, trigger.id, { condition: value })}
+                        value={trigger.status || ""}
+                        onValueChange={(value) => updateTrigger(groupId, trigger.id, { status: value as "online" | "offline" })}
                       >
                         <SelectTrigger className="h-9">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {DEVICE_STATE_CONDITIONS.map(cond => (
-                            <SelectItem key={cond.value} value={cond.value}>
-                              {cond.label}
-                            </SelectItem>
-                          ))}
+                          <SelectItem value="online">Goes Online</SelectItem>
+                          <SelectItem value="offline">Goes Offline</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -608,73 +771,18 @@ export function CreateRulePage() {
               )}
 
               {/* Schedule Trigger */}
-              {trigger.type === 'schedule' && (
+              {trigger.type === "schedule" && (
                 <div className="space-y-2">
-                  <Label className="text-xs">Schedule</Label>
+                  <Label className="text-xs">Cron Expression</Label>
                   <Input
-                    placeholder="e.g., 09:00 daily, Every Monday at 10:00"
-                    value={trigger.schedule || ''}
-                    onChange={(e) => updateTrigger(groupId, trigger.id, { schedule: e.target.value })}
-                    className="h-9"
-                  />
-                  <p className="text-xs text-gray-500">Format: HH:MM daily, Every [Day] at HH:MM, or Cron expression</p>
-                </div>
-              )}
-
-              {/* Webhook Trigger */}
-              {trigger.type === 'webhook' && (
-                <div className="space-y-2">
-                  <Label className="text-xs">Webhook Name/Path</Label>
-                  <Input
-                    placeholder="e.g., my-trigger"
-                    value={trigger.eventType || ''}
-                    onChange={(e) => updateTrigger(groupId, trigger.id, { eventType: e.target.value })}
+                    placeholder="e.g., 0 9 * * * (every day at 9am)"
+                    value={trigger.cron || ""}
+                    onChange={(e) => updateTrigger(groupId, trigger.id, { cron: e.target.value })}
                     className="h-9 font-mono"
                   />
                   <p className="text-xs text-gray-500">
-                    Will create: <code className="bg-gray-100 px-1 py-0.5 rounded">/webhook/{trigger.eventType || 'name'}</code>
+                    Format: minute hour day month weekday (e.g., &quot;0 9 * * 1-5&quot; = weekdays at 9am)
                   </p>
-                </div>
-              )}
-
-              {/* Device Event Trigger */}
-              {trigger.type === 'device_event' && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label className="text-xs">Device</Label>
-                      <Select
-                        value={trigger.deviceId || ''}
-                        onValueChange={(value) => {
-                          const device = workspace.devices.find(d => d.id === value);
-                          updateTrigger(groupId, trigger.id, {
-                            deviceId: value,
-                            deviceName: device?.name
-                          });
-                        }}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder="Select device" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {workspace.devices.map(device => (
-                            <SelectItem key={device.id} value={device.id}>
-                              {device.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Event Type</Label>
-                      <Input
-                        placeholder="e.g., motion_detected"
-                        value={trigger.eventType || ''}
-                        onChange={(e) => updateTrigger(groupId, trigger.id, { eventType: e.target.value })}
-                        className="h-9"
-                      />
-                    </div>
-                  </div>
                 </div>
               )}
             </div>
@@ -686,22 +794,26 @@ export function CreateRulePage() {
 
   // Render Action Card
   const renderActionCard = (action: RuleAction, index: number) => {
-    const actionType = ACTION_TYPES.find(a => a.value === action.type);
+    const actionType = ACTION_TYPES.find((a) => a.value === action.type);
     const Icon = actionType?.icon || Zap;
+    const targetFieldMappings = getFieldMappings(action.targetDeviceId);
+    const isLoadingTargetFields = action.targetDeviceId ? loadingDeviceIds.has(action.targetDeviceId) : false;
 
     return (
       <Card key={action.id} className="border-2 border-gray-200 hover:border-purple-300 transition-all">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
             <div className="flex flex-col items-center gap-2 shrink-0">
-              <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${actionType?.color} flex items-center justify-center shadow-md`}>
+              <div
+                className={`w-10 h-10 rounded-xl bg-gradient-to-br ${actionType?.color} flex items-center justify-center shadow-md`}
+              >
                 <Icon className="w-5 h-5 text-white" />
               </div>
               <div className="flex flex-col gap-1">
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => moveAction(index, 'up')}
+                  onClick={() => moveAction(index, "up")}
                   disabled={index === 0}
                   className="h-6 w-6 p-0"
                 >
@@ -710,7 +822,7 @@ export function CreateRulePage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => moveAction(index, 'down')}
+                  onClick={() => moveAction(index, "down")}
                   disabled={index === actions.length - 1}
                   className="h-6 w-6 p-0"
                 >
@@ -734,101 +846,64 @@ export function CreateRulePage() {
                 </Button>
               </div>
 
-              {/* Device Control Action */}
-              {action.type === 'device_control' && (
+              {/* Webhook Action */}
+              {action.type === "send_webhook" && (
                 <div className="space-y-3">
                   <div className="space-y-2">
-                    <Label className="text-xs">Device</Label>
+                    <Label className="text-xs">Webhook URL</Label>
+                    <Input
+                      placeholder="https://api.example.com/webhook"
+                      value={action.webhookUrl || ""}
+                      onChange={(e) => updateAction(action.id, { webhookUrl: e.target.value })}
+                      className="h-9 font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Method</Label>
                     <Select
-                      value={action.deviceId || ''}
-                      onValueChange={(value) => {
-                        const device = workspace.devices.find(d => d.id === value);
-                        updateAction(action.id, {
-                          deviceId: value,
-                          deviceName: device?.name,
-                          command: '',
-                          value: undefined,
-                        });
-                      }}
+                      value={action.method || "POST"}
+                      onValueChange={(value) => updateAction(action.id, { method: value as "GET" | "POST" | "PUT" })}
                     >
                       <SelectTrigger className="h-9">
-                        <SelectValue placeholder="Select device" />
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {workspace.devices.filter(d => d.controllable).map(device => (
-                          <SelectItem key={device.id} value={device.id}>
-                            {device.name}
-                          </SelectItem>
-                        ))}
+                        <SelectItem value="GET">GET</SelectItem>
+                        <SelectItem value="POST">POST</SelectItem>
+                        <SelectItem value="PUT">PUT</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-
-                  {action.deviceId && (
-                    <div className="space-y-2">
-                      <Label className="text-xs">Command</Label>
-                      <Select
-                        value={action.command || ''}
-                        onValueChange={(value) => updateAction(action.id, { command: value })}
-                      >
-                        <SelectTrigger className="h-9">
-                          <SelectValue placeholder="Select" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="on">Turn ON</SelectItem>
-                          <SelectItem value="off">Turn OFF</SelectItem>
-                          <SelectItem value="toggle">Toggle</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Notification Action */}
-              {action.type === 'notification' && (
-                <div className="space-y-2">
-                  <Label className="text-xs">Message</Label>
-                  <Textarea
-                    placeholder="Notification message..."
-                    value={action.message || ''}
-                    onChange={(e) => updateAction(action.id, { message: e.target.value })}
-                    rows={3}
-                  />
-                </div>
-              )}
-
-              {/* Webhook Action */}
-              {action.type === 'webhook' && (
-                <div className="space-y-2">
-                  <Label className="text-xs">Webhook URL</Label>
-                  <Input
-                    placeholder="https://api.example.com/webhook"
-                    value={action.webhookUrl || ''}
-                    onChange={(e) => updateAction(action.id, { webhookUrl: e.target.value })}
-                    className="h-9 font-mono text-sm"
-                  />
                 </div>
               )}
 
               {/* Email Action */}
-              {action.type === 'email' && (
+              {action.type === "send_email" && (
                 <div className="space-y-3">
                   <div className="space-y-2">
                     <Label className="text-xs">Recipient Email</Label>
                     <Input
                       type="email"
                       placeholder="user@example.com"
-                      value={action.recipient || ''}
+                      value={action.recipient || ""}
                       onChange={(e) => updateAction(action.id, { recipient: e.target.value })}
+                      className="h-9"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Subject</Label>
+                    <Input
+                      placeholder="Alert: Temperature exceeded"
+                      value={action.subject || ""}
+                      onChange={(e) => updateAction(action.id, { subject: e.target.value })}
                       className="h-9"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label className="text-xs">Message</Label>
                     <Textarea
-                      placeholder="Email message..."
-                      value={action.message || ''}
+                      placeholder="Email body..."
+                      value={action.message || ""}
                       onChange={(e) => updateAction(action.id, { message: e.target.value })}
                       rows={3}
                     />
@@ -836,14 +911,152 @@ export function CreateRulePage() {
                 </div>
               )}
 
+              {/* Update Device Action */}
+              {action.type === "update_device" && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs">Target Device</Label>
+                      <Select
+                        value={action.targetDeviceId || ""}
+                        onValueChange={(value) => {
+                          const device = devices.find((d) => d.deviceId === value);
+                          updateAction(action.id, {
+                            targetDeviceId: value,
+                            targetDeviceName: device?.name,
+                            targetField: "",
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Select device" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {devices.map((device) => (
+                            <SelectItem key={device.deviceId} value={device.deviceId}>
+                              {device.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Field</Label>
+                      {isLoadingTargetFields ? (
+                        <div className="h-9 flex items-center gap-2 px-3 border rounded-md bg-gray-50">
+                          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                          <span className="text-xs text-gray-500">Loading fields...</span>
+                        </div>
+                      ) : targetFieldMappings.length > 0 ? (
+                        <Select
+                          value={action.targetField || ""}
+                          onValueChange={(value) => updateAction(action.id, { targetField: value })}
+                        >
+                          <SelectTrigger className="h-9">
+                            <SelectValue placeholder="Select field" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {targetFieldMappings.map((fm) => (
+                              <SelectItem key={fm.sourceField} value={fm.sourceField}>
+                                {fm.displayLabel}
+                                <span className="ml-2 text-[10px] text-gray-500 uppercase">
+                                  ({fm.dataType})
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          placeholder={action.targetDeviceId ? "Enter field key" : "Select device first"}
+                          value={action.targetField || ""}
+                          onChange={(e) => updateAction(action.id, { targetField: e.target.value })}
+                          className="h-9 font-mono text-sm"
+                          disabled={!action.targetDeviceId}
+                        />
+                      )}
+                    </div>
+                  </div>
+                  {(() => {
+                    // Get field type for smart value input
+                    const selectedTargetField = targetFieldMappings.find((fm) => fm.sourceField === action.targetField);
+                    const targetFieldType = selectedTargetField?.dataType || "string";
+                    const isTargetBoolean = targetFieldType === "boolean";
+                    const isTargetNumber = targetFieldType === "number";
+
+                    return (
+                      <div className="space-y-2">
+                        <Label className="text-xs">Value</Label>
+                        {isTargetBoolean ? (
+                          <div className="flex items-center gap-3 h-9 p-2 border rounded-lg bg-gray-50">
+                            <span className={`text-sm font-medium ${action.targetValue === false ? "text-gray-900" : "text-gray-400"}`}>
+                              Off
+                            </span>
+                            <Switch
+                              checked={action.targetValue === true}
+                              onCheckedChange={(checked) => {
+                                updateAction(action.id, { targetValue: checked });
+                              }}
+                            />
+                            <span className={`text-sm font-medium ${action.targetValue === true ? "text-gray-900" : "text-gray-400"}`}>
+                              On
+                            </span>
+                            <span className="ml-auto text-xs text-gray-500">
+                              ({action.targetValue === true ? "true" : "false"})
+                            </span>
+                          </div>
+                        ) : isTargetNumber ? (
+                          <Input
+                            type="number"
+                            placeholder="Enter number value"
+                            value={action.targetValue as number ?? ""}
+                            onChange={(e) => updateAction(action.id, { targetValue: parseFloat(e.target.value) })}
+                            className="h-9"
+                          />
+                        ) : (
+                          <Input
+                            placeholder="Value to set"
+                            value={action.targetValue?.toString() || ""}
+                            onChange={(e) => updateAction(action.id, { targetValue: e.target.value })}
+                            className="h-9"
+                          />
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {/* Loop Warning */}
+                  {(() => {
+                    const loopCheck = checkActionLoop(action);
+                    if (loopCheck?.hasLoop) {
+                      return (
+                        <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                          <div>
+                            <p className="text-xs font-semibold text-amber-800">Potential Infinite Loop</p>
+                            <p className="text-xs text-amber-700 mt-1">
+                              This action updates a field that is being monitored by a trigger.
+                              This may cause the rule to trigger itself repeatedly.
+                            </p>
+                            <p className="text-xs text-amber-600 mt-2 font-medium">
+                              Tip: Consider using a different field, or add conditions to prevent re-triggering.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+              )}
+
               {/* Delay Action */}
-              {action.type === 'delay' && (
+              {action.type === "delay" && (
                 <div className="space-y-2">
                   <Label className="text-xs">Delay Duration (seconds)</Label>
                   <Input
                     type="number"
                     placeholder="e.g., 10"
-                    value={action.delaySeconds || ''}
+                    value={action.delaySeconds || ""}
                     onChange={(e) => updateAction(action.id, { delaySeconds: parseInt(e.target.value) })}
                     className="h-9"
                   />
@@ -851,12 +1064,12 @@ export function CreateRulePage() {
               )}
 
               {/* Log Action */}
-              {action.type === 'log' && (
+              {action.type === "log" && (
                 <div className="space-y-2">
                   <Label className="text-xs">Log Message</Label>
                   <Input
                     placeholder="Log entry message..."
-                    value={action.message || ''}
+                    value={action.message || ""}
                     onChange={(e) => updateAction(action.id, { message: e.target.value })}
                     className="h-9"
                   />
@@ -868,6 +1081,35 @@ export function CreateRulePage() {
       </Card>
     );
   };
+
+  // Loading states
+  if (authLoading || devicesLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50/50 flex items-center justify-center">
+        <div className="flex items-center gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
+          <span className="text-sm text-gray-600">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-gray-50/50 flex items-center justify-center">
+        <Card className="max-w-md">
+          <CardContent className="pt-6 text-center">
+            <AlertCircle className="w-12 h-12 text-yellow-500 mx-auto mb-4" />
+            <h3 className="font-bold text-lg mb-2">Not Authenticated</h3>
+            <p className="text-sm text-gray-600 mb-4">Please log in to create automations.</p>
+            <Button onClick={() => router.push("/login")}>Go to Login</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const totalTriggers = triggerGroups.reduce((sum, g) => sum + g.triggers.length, 0);
 
   return (
     <div className="min-h-screen bg-gray-50/50">
@@ -888,7 +1130,7 @@ export function CreateRulePage() {
               <div className="h-6 w-px bg-gray-300" />
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Create Automation Rule</h1>
-                <p className="text-sm text-gray-500 mt-0.5">{workspace.name}</p>
+                <p className="text-sm text-gray-500 mt-0.5">{workspaceSlug}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -902,9 +1144,10 @@ export function CreateRulePage() {
               </Button>
               <Button
                 onClick={handleSaveRule}
+                disabled={isCreating}
                 className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 gap-2 shadow-md"
               >
-                <Save className="w-4 h-4" />
+                {isCreating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 Save Rule
               </Button>
             </div>
@@ -967,19 +1210,45 @@ export function CreateRulePage() {
                 <div>
                   <p className="text-xs text-gray-500 mb-2">Trigger Groups</p>
                   <p className="text-sm font-semibold text-gray-900">
-                    {triggerGroups.reduce((sum, g) => sum + g.triggers.length, 0)} trigger(s) in {triggerGroups.length} group(s)
+                    {totalTriggers} trigger(s) in {triggerGroups.length} group(s)
                   </p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Groups connected with <Badge variant="outline" className="ml-1">{groupsLogicOperator}</Badge>
-                  </p>
+                  {triggerGroups.length > 1 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Groups connected with{" "}
+                      <Badge variant="outline" className="ml-1">
+                        {groupsLogicOperator}
+                      </Badge>
+                    </p>
+                  )}
                 </div>
                 <Separator />
                 <div>
                   <p className="text-xs text-gray-500 mb-2">Actions</p>
-                  <p className="text-sm font-semibold text-gray-900">
-                    {actions.length} action(s) configured
-                  </p>
+                  <p className="text-sm font-semibold text-gray-900">{actions.length} action(s) configured</p>
                 </div>
+                {/* Loop Warnings in Summary */}
+                {(() => {
+                  const warnings = getLoopWarnings();
+                  if (warnings.length > 0) {
+                    return (
+                      <>
+                        <Separator />
+                        <div className="p-3 bg-amber-100 border border-amber-300 rounded-lg">
+                          <div className="flex items-center gap-2 mb-2">
+                            <AlertTriangle className="w-4 h-4 text-amber-600" />
+                            <p className="text-xs font-bold text-amber-800">
+                              {warnings.length} Loop Warning{warnings.length > 1 ? "s" : ""}
+                            </p>
+                          </div>
+                          <p className="text-xs text-amber-700">
+                            Some actions may cause infinite loops. Review the warnings in the Actions section.
+                          </p>
+                        </div>
+                      </>
+                    );
+                  }
+                  return null;
+                })()}
               </CardContent>
             </Card>
 
@@ -994,22 +1263,20 @@ export function CreateRulePage() {
               <CardContent className="space-y-3 text-sm">
                 <div>
                   <h4 className="font-semibold text-gray-900 mb-1">AND</h4>
-                  <p className="text-xs text-gray-600">
-                    All conditions must be true to trigger
-                  </p>
+                  <p className="text-xs text-gray-600">All conditions must be true to trigger</p>
                 </div>
                 <div>
                   <h4 className="font-semibold text-gray-900 mb-1">OR</h4>
-                  <p className="text-xs text-gray-600">
-                    Any condition can trigger the rule
-                  </p>
+                  <p className="text-xs text-gray-600">Any condition can trigger the rule</p>
                 </div>
                 <Separator />
                 <div className="text-xs text-gray-600">
                   <p className="font-semibold mb-1">Example:</p>
                   <code className="bg-gray-900 text-green-400 p-2 rounded block text-xs">
-                    {`(Temp > 30 AND Humidity > 70)`}<br/>
-                    OR<br/>
+                    {`(Temp > 30 AND Humidity > 70)`}
+                    <br />
+                    OR
+                    <br />
                     {`(Motion Detected)`}
                   </code>
                 </div>
@@ -1028,9 +1295,7 @@ export function CreateRulePage() {
                       <GitBranch className="w-5 h-5 text-blue-600" />
                       Trigger Conditions
                     </CardTitle>
-                    <CardDescription className="mt-1">
-                      Define when this rule should activate
-                    </CardDescription>
+                    <CardDescription className="mt-1">Define when this rule should activate</CardDescription>
                   </div>
                   <Button
                     onClick={addTriggerGroup}
@@ -1054,7 +1319,7 @@ export function CreateRulePage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setGroupsLogicOperator(groupsLogicOperator === 'AND' ? 'OR' : 'AND')}
+                            onClick={() => setGroupsLogicOperator(groupsLogicOperator === "AND" ? "OR" : "AND")}
                             className="gap-2 font-bold border-2 border-purple-300 bg-purple-50 hover:bg-purple-100"
                           >
                             <Shuffle className="w-4 h-4" />
@@ -1073,11 +1338,13 @@ export function CreateRulePage() {
                             </Badge>
                             {group.triggers.length > 1 && (
                               <>
-                                <span className="text-gray-400">•</span>
+                                <span className="text-gray-400">&#x2022;</span>
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  onClick={() => updateGroupOperator(group.id, group.logicOperator === 'AND' ? 'OR' : 'AND')}
+                                  onClick={() =>
+                                    updateGroupOperator(group.id, group.logicOperator === "AND" ? "OR" : "AND")
+                                  }
                                   className="h-7 px-2 text-xs font-bold border-blue-300"
                                 >
                                   <Link2 className="w-3 h-3 mr-1" />
@@ -1103,11 +1370,11 @@ export function CreateRulePage() {
                             <div key={trigger.id}>
                               {triggerIndex > 0 && (
                                 <div className="flex items-center gap-2 my-2 ml-12">
-                                  <div className="w-full h-px bg-gradient-to-r from-blue-300 via-blue-400 to-blue-300"></div>
+                                  <div className="w-full h-px bg-gradient-to-r from-blue-300 via-blue-400 to-blue-300" />
                                   <Badge className="bg-blue-500 text-white font-bold text-xs px-2">
                                     {group.logicOperator}
                                   </Badge>
-                                  <div className="w-full h-px bg-gradient-to-r from-blue-300 via-blue-400 to-blue-300"></div>
+                                  <div className="w-full h-px bg-gradient-to-r from-blue-300 via-blue-400 to-blue-300" />
                                 </div>
                               )}
                               {renderTriggerCard(group.id, trigger)}
@@ -1116,8 +1383,8 @@ export function CreateRulePage() {
 
                           {/* Add Trigger Button */}
                           {showTriggerTypeSelector === group.id ? (
-                            <div className="grid grid-cols-2 gap-3 mt-3">
-                              {TRIGGER_TYPES.map(type => {
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                              {TRIGGER_TYPES.map((type) => {
                                 const TypeIcon = type.icon;
                                 return (
                                   <button
@@ -1125,7 +1392,9 @@ export function CreateRulePage() {
                                     onClick={() => addTrigger(group.id, type.value)}
                                     className="p-4 border-2 border-gray-200 rounded-xl hover:border-blue-400 hover:bg-blue-50 transition-all text-left group"
                                   >
-                                    <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${type.color} flex items-center justify-center mb-2 group-hover:scale-110 transition-transform`}>
+                                    <div
+                                      className={`w-10 h-10 rounded-lg bg-gradient-to-br ${type.color} flex items-center justify-center mb-2 group-hover:scale-110 transition-transform`}
+                                    >
                                       <TypeIcon className="w-5 h-5 text-white" />
                                     </div>
                                     <div className="text-sm font-semibold text-gray-900">{type.label}</div>
@@ -1155,16 +1424,14 @@ export function CreateRulePage() {
             {/* Actions Section */}
             <Card className="border-2 border-purple-200 shadow-sm">
               <CardHeader className="bg-gradient-to-r from-purple-50 to-pink-50 border-b border-purple-100">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Zap className="w-5 h-5 text-purple-600" />
-                      Actions
-                    </CardTitle>
-                    <CardDescription className="mt-1">
-                      What should happen when triggered (executed in order)
-                    </CardDescription>
-                  </div>
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <Zap className="w-5 h-5 text-purple-600" />
+                    Actions
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    What should happen when triggered (executed in order)
+                  </CardDescription>
                 </div>
               </CardHeader>
               <CardContent className="pt-6">
@@ -1174,9 +1441,9 @@ export function CreateRulePage() {
                       {index > 0 && (
                         <div className="flex items-center justify-center my-3">
                           <div className="flex items-center gap-2">
-                            <div className="w-8 h-px bg-purple-300"></div>
+                            <div className="w-8 h-px bg-purple-300" />
                             <ArrowRight className="w-4 h-4 text-purple-500" />
-                            <div className="w-8 h-px bg-purple-300"></div>
+                            <div className="w-8 h-px bg-purple-300" />
                           </div>
                         </div>
                       )}
@@ -1186,8 +1453,8 @@ export function CreateRulePage() {
 
                   {/* Add Action Button */}
                   {showActionTypeSelector ? (
-                    <div className="grid grid-cols-2 gap-3">
-                      {ACTION_TYPES.map(type => {
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {ACTION_TYPES.map((type) => {
                         const TypeIcon = type.icon;
                         return (
                           <button
@@ -1195,7 +1462,9 @@ export function CreateRulePage() {
                             onClick={() => addAction(type.value)}
                             className="p-4 border-2 border-gray-200 rounded-xl hover:border-purple-400 hover:bg-purple-50 transition-all text-left group"
                           >
-                            <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${type.color} flex items-center justify-center mb-2 group-hover:scale-110 transition-transform`}>
+                            <div
+                              className={`w-10 h-10 rounded-lg bg-gradient-to-br ${type.color} flex items-center justify-center mb-2 group-hover:scale-110 transition-transform`}
+                            >
                               <TypeIcon className="w-5 h-5 text-white" />
                             </div>
                             <div className="text-sm font-semibold text-gray-900">{type.label}</div>
@@ -1219,11 +1488,7 @@ export function CreateRulePage() {
                     <div className="text-center py-8 border-2 border-dashed border-gray-300 rounded-xl bg-gray-50/50">
                       <Zap className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                       <p className="text-gray-500 mb-4">No actions configured yet</p>
-                      <Button
-                        onClick={() => setShowActionTypeSelector(true)}
-                        variant="outline"
-                        className="gap-2"
-                      >
+                      <Button onClick={() => setShowActionTypeSelector(true)} variant="outline" className="gap-2">
                         <Plus className="w-4 h-4" />
                         Add Your First Action
                       </Button>
@@ -1235,6 +1500,16 @@ export function CreateRulePage() {
           </div>
         </div>
       </div>
+
+      {/* Creating overlay */}
+      {isCreating && (
+        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 flex items-center gap-3 shadow-xl">
+            <Loader2 className="w-5 h-5 animate-spin text-purple-600" />
+            <span className="text-sm font-medium">Creating automation...</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

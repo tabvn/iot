@@ -99,7 +99,7 @@ export function AccountPage() {
               <div className="relative">
                 {avatarUrl ? (
                   <img
-                    src={avatarUrl}
+                    src={`${process.env.NEXT_PUBLIC_API_BASE_URL}${avatarUrl}`}
                     alt={user?.name || 'Avatar'}
                     className="w-24 h-24 rounded-2xl object-cover shadow-lg"
                   />
