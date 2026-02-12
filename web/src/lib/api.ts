@@ -1,153 +1,165 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+async function handleResponse<T>(res: Response, fallbackError: string): Promise<T> {
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || fallbackError);
+  }
+  return res.json() as Promise<T>;
+}
+
+function authHeaders(token: string, workspaceSlug?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  };
+  if (workspaceSlug) {
+    headers["x-workspace-alias"] = workspaceSlug;
+  }
+  return headers;
+}
+
+// ============================================================================
+// Auth
+// ============================================================================
+
 export async function apiLogin(email: string, password: string) {
   const res = await fetch(`${API_BASE}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Login failed");
-  }
-  return (await res.json()) as { token?: string; sessionId: string; userId: string };
+  return handleResponse<{ token?: string; sessionId: string; userId: string }>(res, "Login failed");
 }
 
 export async function apiSignup(name: string, email: string, password: string) {
   const res = await fetch(`${API_BASE}/users`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name,email, passwordHash: password }),
+    body: JSON.stringify({ name, email, passwordHash: password }),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Sign up failed");
-  }
-  return res.json() as Promise<{ userId: string }>;
+  return handleResponse<{ userId: string }>(res, "Sign up failed");
 }
 
 export async function apiGetMe(token: string) {
   const res = await fetch(`${API_BASE}/users/me`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to fetch user");
-  }
-  return (await res.json()) as { userId: string; name: string; email: string; avatarUrl?: string };
+  return handleResponse<ApiUser>(res, "Failed to fetch user");
 }
 
-export async function apiListWorkspaces(token: string, userId: string) {
-  const res = await fetch(`${API_BASE}/users/${userId}/workspaces`, {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to load workspaces");
-  }
-  return res.json() as Promise<{
-    workspaces: { workspaceId: string; name: string; slug: string; description?: string; createdAt: string }[];
-  }>;
-}
+// ============================================================================
+// User types & API
+// ============================================================================
 
-export async function apiCreateWorkspace(token: string, payload: { name: string; slug: string; description?: string }) {
-  const res = await fetch(`${API_BASE}/workspaces`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to create workspace");
-  }
-  return res.json() as Promise<{ workspaceId: string; name: string; slug: string; description?: string; createdAt: string }>;
-}
-
-export async function apiListDevices(token: string, workspaceSlug: string) {
-  const res = await fetch(`${API_BASE}/devices`, {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to load devices");
-  }
-  return res.json() as Promise<{
-    devices: { deviceId: string; name: string; type: string; createdAt: string }[];
-  }>;
-}
-
-export async function apiCheckSlugAvailable(slug: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/workspaces/by-alias/${encodeURIComponent(slug)}`, {
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-  });
-  // 404 = available, 200 = taken
-  return res.status === 404;
+export interface ApiUser {
+  userId: string;
+  name: string;
+  email: string;
+  avatarUrl?: string;
+  createdAt?: string;
 }
 
 export async function apiUpdateUser(
   token: string,
   userId: string,
-  payload: { name?: string; email?: string; avatarUrl?: string },
+  payload: { name?: string; email?: string; passwordHash?: string; avatarUrl?: string },
 ) {
   const res = await fetch(`${API_BASE}/users/${userId}`, {
     method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
+    headers: authHeaders(token),
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to update user");
-  }
-  return res.json() as Promise<{ userId: string; name: string; email: string; avatarUrl?: string }>;
+  return handleResponse<ApiUser>(res, "Failed to update user");
 }
 
-export interface CreateDevicePayload {
+// ============================================================================
+// Workspace types & API
+// ============================================================================
+
+export interface WorkspaceDetail {
+  workspaceId: string;
   name: string;
-  type: string;
+  slug: string;
   description?: string;
-  manufacturer?: string;
-  model?: string;
-  firmwareVersion?: string;
-  location?: string;
-  tags?: string[];
-  metadata?: Record<string, unknown>;
-  fieldMappings?: {
-    sourceField: string;
-    displayLabel: string;
-    dataType: "number" | "string" | "boolean" | "json";
-    unit?: string;
-    min?: number;
-    max?: number;
-    precision?: number;
-    icon?: string;
-    color?: string;
-  }[];
+  ownerUserId: string;
+  plan?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
-// ---- Device detail ----
+export async function apiListWorkspaces(token: string, userId: string): Promise<{ workspaces: WorkspaceDetail[] }> {
+  const res = await fetch(`${API_BASE}/users/${userId}/workspaces`, {
+    headers: authHeaders(token),
+  });
+  return handleResponse(res, "Failed to load workspaces");
+}
+
+export async function apiCreateWorkspace(token: string, payload: { name: string; slug: string; description?: string }): Promise<WorkspaceDetail> {
+  const res = await fetch(`${API_BASE}/workspaces`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to create workspace");
+}
+
+export async function apiGetWorkspaceByAlias(workspaceSlug: string): Promise<WorkspaceDetail> {
+  const res = await fetch(`${API_BASE}/workspaces/by-alias/${encodeURIComponent(workspaceSlug)}`, {
+    headers: { "Content-Type": "application/json" },
+  });
+  return handleResponse(res, "Workspace not found");
+}
+
+export async function apiCheckSlugAvailable(slug: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/workspaces/by-alias/${encodeURIComponent(slug)}`, {
+    headers: { "Content-Type": "application/json" },
+  });
+  return res.status === 404;
+}
+
+export async function apiUpdateWorkspace(
+  token: string,
+  workspaceSlug: string,
+  payload: { name?: string; slug?: string; description?: string },
+): Promise<WorkspaceDetail> {
+  const res = await fetch(`${API_BASE}/workspace`, {
+    method: "PUT",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to update workspace");
+}
+
+export async function apiDeleteWorkspace(token: string, workspaceSlug: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/workspace`, {
+    method: "DELETE",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to delete workspace");
+}
+
+// ============================================================================
+// Device types & API
+// ============================================================================
+
+export interface DeviceFieldMapping {
+  sourceField: string;
+  displayLabel: string;
+  dataType: "number" | "string" | "boolean" | "json";
+  unit?: string;
+  min?: number;
+  max?: number;
+  precision?: number;
+  icon?: string;
+  color?: string;
+}
 
 export interface DeviceDetail {
-  pk: string;
-  sk: string;
-  entityType: string;
   deviceId: string;
   workspaceId: string;
   name: string;
@@ -160,38 +172,61 @@ export interface DeviceDetail {
   location?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
-  fieldMappings?: {
-    sourceField: string;
-    displayLabel: string;
-    dataType: "number" | "string" | "boolean" | "json";
-    unit?: string;
-    min?: number;
-    max?: number;
-    precision?: number;
-    icon?: string;
-    color?: string;
-  }[];
+  fieldMappings?: DeviceFieldMapping[];
   lastSeenAt?: string;
+  lastData?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }
 
-export async function apiGetDevice(token: string, workspaceSlug: string, deviceId: string): Promise<DeviceDetail> {
-  const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to load device");
-  }
-  return res.json() as Promise<DeviceDetail>;
+export interface CreateDevicePayload {
+  name: string;
+  type: string;
+  description?: string;
+  manufacturer?: string;
+  model?: string;
+  firmwareVersion?: string;
+  location?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  fieldMappings?: DeviceFieldMapping[];
 }
 
-// ---- Analytics ----
+export async function apiListDevices(token: string, workspaceSlug: string): Promise<{ devices: DeviceDetail[] }> {
+  const res = await fetch(`${API_BASE}/devices`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load devices");
+}
+
+export async function apiGetDevice(token: string, workspaceSlug: string, deviceId: string): Promise<DeviceDetail> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load device");
+}
+
+export async function apiCreateDevice(token: string, workspaceSlug: string, payload: CreateDevicePayload): Promise<DeviceDetail> {
+  const res = await fetch(`${API_BASE}/devices`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to create device");
+}
+
+export async function apiUpdateDevice(token: string, workspaceSlug: string, deviceId: string, payload: Partial<CreateDevicePayload>): Promise<DeviceDetail> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+    method: "PUT",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to update device");
+}
+
+// ============================================================================
+// Analytics
+// ============================================================================
 
 export interface AnalyticsPoint {
   at: string;
@@ -213,27 +248,21 @@ export async function apiGetDeviceAnalytics(
   deviceId: string,
   params?: { from?: string; to?: string; cursor?: string; limit?: number },
 ): Promise<AnalyticsResponse> {
-  const url = new URL(`${API_BASE}/devices/${deviceId}/analytics`);
+  const url = new URL(`${API_BASE}/devices/${deviceId}/analytics`, typeof window !== "undefined" ? window.location.origin : undefined);
   if (params?.from) url.searchParams.set("from", params.from);
   if (params?.to) url.searchParams.set("to", params.to);
   if (params?.cursor) url.searchParams.set("cursor", params.cursor);
   if (params?.limit) url.searchParams.set("limit", String(params.limit));
 
   const res = await fetch(url.toString(), {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to load analytics");
-  }
-  return res.json() as Promise<AnalyticsResponse>;
+  return handleResponse(res, "Failed to load analytics");
 }
 
-// ---- Ingest (seed data) ----
+// ============================================================================
+// Ingest
+// ============================================================================
 
 export async function apiIngestDeviceData(
   token: string,
@@ -243,58 +272,226 @@ export async function apiIngestDeviceData(
 ): Promise<{ ok: boolean }> {
   const res = await fetch(`${API_BASE}/devices/${deviceId}/ingest`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to ingest data");
-  }
-  return res.json() as Promise<{ ok: boolean }>;
-}
-
-export async function apiUpdateDevice(token: string, workspaceSlug: string, deviceId: string, payload: Partial<CreateDevicePayload>) {
-  const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to update device");
-  }
-  return res.json();
-}
-
-// ---- Create device ----
-
-export async function apiCreateDevice(token: string, workspaceSlug: string, payload: CreateDevicePayload) {
-  const res = await fetch(`${API_BASE}/devices`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to create device");
-  }
-  return res.json();
+  return handleResponse(res, "Failed to ingest data");
 }
 
 // ============================================================================
-// Automations API
+// Device API Keys
+// ============================================================================
+
+export interface DeviceApiKeyInfo {
+  hasKey: boolean;
+  deviceApiKeyId?: string;
+  name?: string;
+  keyPrefix?: string;
+  createdAt?: string;
+}
+
+export interface CreateDeviceApiKeyResponse {
+  deviceApiKeyId: string;
+  deviceId: string;
+  key: string;
+  keyPrefix: string;
+  message: string;
+}
+
+export async function apiGetDeviceApiKey(token: string, workspaceSlug: string, deviceId: string): Promise<DeviceApiKeyInfo> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}/api-key`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to get device API key");
+}
+
+export async function apiCreateDeviceApiKey(
+  token: string,
+  workspaceSlug: string,
+  deviceId: string,
+  payload?: { name?: string },
+): Promise<CreateDeviceApiKeyResponse> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}/api-key`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res, "Failed to create device API key");
+}
+
+export async function apiRevokeDeviceApiKey(token: string, workspaceSlug: string, deviceId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}/api-key`, {
+    method: "DELETE",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to revoke device API key");
+}
+
+// ============================================================================
+// Workspace API Keys
+// ============================================================================
+
+export interface WorkspaceApiKey {
+  apiKeyId: string;
+  workspaceId: string;
+  name: string;
+  keyPrefix: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+  createdAt: string;
+}
+
+export interface CreateWorkspaceApiKeyResponse {
+  apiKeyId: string;
+  key: string;
+  keyPrefix: string;
+  message: string;
+}
+
+export async function apiListWorkspaceApiKeys(token: string, workspaceSlug: string): Promise<{ keys: WorkspaceApiKey[] }> {
+  const res = await fetch(`${API_BASE}/workspace/api-keys`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to list workspace API keys");
+}
+
+export async function apiCreateWorkspaceApiKey(
+  token: string,
+  workspaceSlug: string,
+  payload?: { name?: string },
+): Promise<CreateWorkspaceApiKeyResponse> {
+  const res = await fetch(`${API_BASE}/workspace/api-keys`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res, "Failed to create workspace API key");
+}
+
+export async function apiRevokeWorkspaceApiKey(token: string, workspaceSlug: string, apiKeyId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/workspace/api-keys/${apiKeyId}`, {
+    method: "DELETE",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to revoke workspace API key");
+}
+
+// ============================================================================
+// Workspace Members
+// ============================================================================
+
+export type MemberRole = "owner" | "admin" | "editor" | "viewer";
+export type DevicePermission = "view" | "control" | "manage";
+
+export interface WorkspaceMember {
+  userId: string;
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  role: MemberRole;
+  devicePermissions?: Record<string, DevicePermission[]>;
+  createdAt: string;
+}
+
+export async function apiListMembers(token: string, workspaceSlug: string): Promise<{ members: WorkspaceMember[] }> {
+  const res = await fetch(`${API_BASE}/members`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to list members");
+}
+
+export async function apiGetMyMembership(token: string, workspaceSlug: string): Promise<WorkspaceMember> {
+  const res = await fetch(`${API_BASE}/members/me`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to get membership");
+}
+
+export async function apiAddMember(
+  token: string,
+  workspaceSlug: string,
+  payload: { userId: string; role: MemberRole; devicePermissions?: Record<string, DevicePermission[]> },
+): Promise<{ member: WorkspaceMember }> {
+  const res = await fetch(`${API_BASE}/members`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to add member");
+}
+
+export async function apiUpdateMember(
+  token: string,
+  workspaceSlug: string,
+  userId: string,
+  payload: { role?: MemberRole; devicePermissions?: Record<string, DevicePermission[]> },
+): Promise<{ member: WorkspaceMember }> {
+  const res = await fetch(`${API_BASE}/members/${userId}`, {
+    method: "PUT",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to update member");
+}
+
+export async function apiRemoveMember(token: string, workspaceSlug: string, userId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/members/${userId}`, {
+    method: "DELETE",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to remove member");
+}
+
+// ============================================================================
+// Workspace Plan & Billing
+// ============================================================================
+
+export type WorkspacePlan = "starter" | "professional" | "business" | "enterprise";
+
+export interface WorkspacePlanInfo {
+  workspaceId: string;
+  plan: WorkspacePlan;
+  maxDevices?: number;
+  maxMembers?: number;
+  maxAutomations?: number;
+  dataRetentionDays?: number;
+}
+
+export interface BillingInvoice {
+  invoiceId: string;
+  workspaceId: string;
+  amount: number;
+  status: string;
+  period: string;
+  paidAt?: string;
+  createdAt: string;
+}
+
+export async function apiGetPlan(token: string, workspaceSlug: string): Promise<WorkspacePlanInfo> {
+  const res = await fetch(`${API_BASE}/plan`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to get plan");
+}
+
+export async function apiUpdatePlan(token: string, workspaceSlug: string, plan: WorkspacePlan): Promise<{ workspaceId: string; plan: string }> {
+  const res = await fetch(`${API_BASE}/plan`, {
+    method: "PUT",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify({ plan }),
+  });
+  return handleResponse(res, "Failed to update plan");
+}
+
+export async function apiGetBilling(token: string, workspaceSlug: string): Promise<{ invoices: BillingInvoice[] }> {
+  const res = await fetch(`${API_BASE}/billing`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to get billing history");
+}
+
+// ============================================================================
+// Automations
 // ============================================================================
 
 export type AutomationStatus = "active" | "paused" | "disabled";
@@ -383,11 +580,8 @@ export interface AutomationConditionGroup {
 }
 
 export interface Automation {
-  pk: string;
-  sk: string;
-  entityType: "AUTOMATION";
-  workspaceId: string;
   automationId: string;
+  workspaceId: string;
   name: string;
   description?: string;
   status: AutomationStatus;
@@ -396,6 +590,8 @@ export interface Automation {
   conditionGroups?: AutomationConditionGroup[];
   conditionLogic?: "AND" | "OR";
   actions: AutomationActionConfig[];
+  lastTriggeredAt?: string;
+  executionCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -405,6 +601,8 @@ export interface CreateAutomationPayload {
   description?: string;
   triggerType: AutomationTriggerType;
   triggerConfig: AutomationTriggerConfig;
+  conditionGroups?: AutomationConditionGroup[];
+  conditionLogic?: "AND" | "OR";
   actions: AutomationActionConfig[];
 }
 
@@ -414,95 +612,375 @@ export interface UpdateAutomationPayload {
   status?: AutomationStatus;
   triggerType?: AutomationTriggerType;
   triggerConfig?: AutomationTriggerConfig;
+  conditionGroups?: AutomationConditionGroup[];
+  conditionLogic?: "AND" | "OR";
   actions?: AutomationActionConfig[];
 }
 
-// ---- List automations ----
-
 export async function apiListAutomations(token: string, workspaceSlug: string): Promise<{ automations: Automation[] }> {
   const res = await fetch(`${API_BASE}/automations`, {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to load automations");
-  }
-  return res.json() as Promise<{ automations: Automation[] }>;
+  return handleResponse(res, "Failed to load automations");
 }
-
-// ---- Get automation ----
 
 export async function apiGetAutomation(token: string, workspaceSlug: string, automationId: string): Promise<Automation> {
   const res = await fetch(`${API_BASE}/automations/${automationId}`, {
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to load automation");
-  }
-  return res.json() as Promise<Automation>;
+  return handleResponse(res, "Failed to load automation");
 }
 
-// ---- Create automation ----
-
-export async function apiCreateAutomation(token: string, workspaceSlug: string, payload: CreateAutomationPayload): Promise<{ automationId: string }> {
+export async function apiCreateAutomation(token: string, workspaceSlug: string, payload: CreateAutomationPayload): Promise<Automation> {
   const res = await fetch(`${API_BASE}/automations`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to create automation");
-  }
-  return res.json() as Promise<{ automationId: string }>;
+  return handleResponse(res, "Failed to create automation");
 }
 
-// ---- Update automation ----
-
-export async function apiUpdateAutomation(token: string, workspaceSlug: string, automationId: string, payload: UpdateAutomationPayload): Promise<{ ok: boolean }> {
+export async function apiUpdateAutomation(token: string, workspaceSlug: string, automationId: string, payload: UpdateAutomationPayload): Promise<Automation> {
   const res = await fetch(`${API_BASE}/automations/${automationId}`, {
     method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to update automation");
-  }
-  return res.json() as Promise<{ ok: boolean }>;
+  return handleResponse(res, "Failed to update automation");
 }
-
-// ---- Delete automation ----
 
 export async function apiDeleteAutomation(token: string, workspaceSlug: string, automationId: string): Promise<{ ok: boolean }> {
   const res = await fetch(`${API_BASE}/automations/${automationId}`, {
     method: "DELETE",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "x-workspace-alias": workspaceSlug,
-    },
+    headers: authHeaders(token, workspaceSlug),
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || "Failed to delete automation");
+  return handleResponse(res, "Failed to delete automation");
+}
+
+// ============================================================================
+// Automation Execution Logs
+// ============================================================================
+
+export type AutomationLogStatus = "success" | "partial_failure" | "failure";
+
+export interface ActionExecutionResult {
+  actionIndex: number;
+  actionType: string;
+  status: "success" | "failure";
+  error?: string;
+  durationMs: number;
+}
+
+export interface AutomationLog {
+  logId: string;
+  workspaceId: string;
+  automationId: string;
+  automationName: string;
+  triggerType: string;
+  triggerData: Record<string, unknown>;
+  conditionsMatched: boolean;
+  status: AutomationLogStatus;
+  actionResults: ActionExecutionResult[];
+  totalDurationMs: number;
+  createdAt: string;
+  expiresAt?: string;
+}
+
+export async function apiListAutomationLogs(
+  token: string,
+  workspaceSlug: string,
+  automationId: string,
+  params?: { limit?: number },
+): Promise<{ logs: AutomationLog[] }> {
+  const url = new URL(`${API_BASE}/automations/${automationId}/logs`, typeof window !== "undefined" ? window.location.origin : undefined);
+  if (params?.limit) url.searchParams.set("limit", String(params.limit));
+
+  const res = await fetch(url.toString(), {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load automation logs");
+}
+
+export async function apiListWorkspaceAutomationLogs(
+  token: string,
+  workspaceSlug: string,
+  params?: { automationId?: string; status?: string; limit?: number },
+): Promise<{ logs: AutomationLog[] }> {
+  const url = new URL(`${API_BASE}/automations/logs`, typeof window !== "undefined" ? window.location.origin : undefined);
+  if (params?.automationId) url.searchParams.set("automationId", params.automationId);
+  if (params?.status) url.searchParams.set("status", params.status);
+  if (params?.limit) url.searchParams.set("limit", String(params.limit));
+
+  const res = await fetch(url.toString(), {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load automation logs");
+}
+
+// ============================================================================
+// Automation Stats
+// ============================================================================
+
+export interface AutomationStats {
+  automationId: string;
+  totalExecutions: number;
+  successCount: number;
+  failureCount: number;
+  partialFailureCount: number;
+  lastExecutionAt: string | null;
+  lastExecutionStatus: AutomationLogStatus | null;
+  averageDurationMs: number;
+  totalDurationMs: number;
+}
+
+export async function apiGetAutomationStats(
+  token: string,
+  workspaceSlug: string,
+  automationId: string,
+): Promise<AutomationStats> {
+  const res = await fetch(`${API_BASE}/automations/${automationId}/stats`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load automation stats");
+}
+
+export async function apiListAutomationStats(
+  token: string,
+  workspaceSlug: string,
+): Promise<{ stats: AutomationStats[] }> {
+  const res = await fetch(`${API_BASE}/automations/stats`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load automation stats");
+}
+
+// ============================================================================
+// Workspace Invitations
+// ============================================================================
+
+export type InvitationStatus = "pending" | "accepted" | "declined" | "expired";
+
+export interface WorkspaceInvitation {
+  invitationId: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceSlug: string;
+  email: string;
+  role: MemberRole;
+  devicePermissions?: Record<string, DevicePermission[]>;
+  invitedByUserId: string;
+  invitedByName?: string;
+  status: InvitationStatus;
+  expiresAt: string;
+  acceptedAt?: string;
+  createdAt: string;
+}
+
+export interface CreateInvitationPayload {
+  email: string;
+  role: MemberRole;
+  devicePermissions?: Record<string, DevicePermission[]>;
+}
+
+export interface CreateInvitationResponse {
+  invitationId: string;
+  token: string;
+  email: string;
+  role: MemberRole;
+  status: string;
+  expiresAt: string;
+  emailSent?: boolean;
+}
+
+export async function apiCreateInvitation(
+  token: string,
+  workspaceSlug: string,
+  payload: CreateInvitationPayload,
+): Promise<CreateInvitationResponse> {
+  const res = await fetch(`${API_BASE}/invitations`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to create invitation");
+}
+
+export async function apiListInvitations(
+  token: string,
+  workspaceSlug: string,
+): Promise<{ invitations: WorkspaceInvitation[] }> {
+  const res = await fetch(`${API_BASE}/invitations`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to list invitations");
+}
+
+export async function apiGetInvitationByToken(inviteToken: string): Promise<WorkspaceInvitation> {
+  const res = await fetch(`${API_BASE}/invitations/by-token/${inviteToken}`, {
+    headers: { "Content-Type": "application/json" },
+  });
+  return handleResponse(res, "Failed to get invitation");
+}
+
+export interface AcceptInvitationResponse {
+  ok: boolean;
+  workspaceId: string;
+  workspaceSlug: string;
+  role: string;
+  userId?: string;
+  userCreated?: boolean;
+  token?: string;
+  sessionId?: string;
+}
+
+export async function apiAcceptInvitation(
+  authToken: string | undefined,
+  inviteToken: string,
+): Promise<AcceptInvitationResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
   }
-  return res.json() as Promise<{ ok: boolean }>;
+
+  const res = await fetch(`${API_BASE}/invitations/accept/${inviteToken}`, {
+    method: "POST",
+    headers,
+  });
+  return handleResponse(res, "Failed to accept invitation");
+}
+
+export async function apiDeclineInvitation(inviteToken: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/invitations/decline/${inviteToken}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return handleResponse(res, "Failed to decline invitation");
+}
+
+export async function apiCancelInvitation(
+  token: string,
+  workspaceSlug: string,
+  invitationId: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/invitations/${invitationId}`, {
+    method: "DELETE",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to cancel invitation");
+}
+
+export async function apiGetMyInvitations(token: string): Promise<{ invitations: WorkspaceInvitation[] }> {
+  const res = await fetch(`${API_BASE}/users/me/invitations`, {
+    headers: authHeaders(token),
+  });
+  return handleResponse(res, "Failed to get invitations");
+}
+
+// ============================================================================
+// Workspace Notifications
+// ============================================================================
+
+export type NotificationType =
+  | "automation_triggered"
+  | "automation_failed"
+  | "automation_partial_failure"
+  | "member_joined"
+  | "member_left"
+  | "invitation_accepted"
+  | "device_offline"
+  | "device_online"
+  | "system";
+
+export type NotificationSeverity = "info" | "warning" | "error" | "success";
+
+export interface WorkspaceNotification {
+  notificationId: string;
+  workspaceId: string;
+  userId: string;
+  type: NotificationType;
+  severity: NotificationSeverity;
+  title: string;
+  message: string;
+  metadata?: Record<string, unknown>;
+  read: boolean;
+  readAt?: string;
+  createdAt: string;
+}
+
+export interface NotificationPreferences {
+  disabledTypes: NotificationType[];
+  emailEnabled: boolean;
+}
+
+export async function apiListNotifications(
+  token: string,
+  workspaceSlug: string,
+  params?: { unreadOnly?: boolean; limit?: number },
+): Promise<{ notifications: WorkspaceNotification[] }> {
+  const url = new URL(`${API_BASE}/notifications`, typeof window !== "undefined" ? window.location.origin : undefined);
+  if (params?.unreadOnly) url.searchParams.set("unreadOnly", "true");
+  if (params?.limit) url.searchParams.set("limit", String(params.limit));
+
+  const res = await fetch(url.toString(), {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to load notifications");
+}
+
+export async function apiGetUnreadCount(
+  token: string,
+  workspaceSlug: string,
+): Promise<{ unreadCount: number }> {
+  const res = await fetch(`${API_BASE}/notifications/unread-count`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to get unread count");
+}
+
+export async function apiMarkNotificationRead(
+  token: string,
+  workspaceSlug: string,
+  notificationId: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/notifications/${notificationId}/read`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to mark notification as read");
+}
+
+export async function apiMarkAllNotificationsRead(
+  token: string,
+  workspaceSlug: string,
+): Promise<{ ok: boolean; markedCount: number }> {
+  const res = await fetch(`${API_BASE}/notifications/read-all`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to mark all notifications as read");
+}
+
+export async function apiGetNotificationPreferences(
+  token: string,
+  workspaceSlug: string,
+): Promise<NotificationPreferences> {
+  const res = await fetch(`${API_BASE}/notifications/preferences`, {
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to get notification preferences");
+}
+
+export async function apiUpdateNotificationPreferences(
+  token: string,
+  workspaceSlug: string,
+  payload: Partial<NotificationPreferences>,
+): Promise<NotificationPreferences> {
+  const res = await fetch(`${API_BASE}/notifications/preferences`, {
+    method: "PUT",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse(res, "Failed to update notification preferences");
 }

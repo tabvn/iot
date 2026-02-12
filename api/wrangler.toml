@@ -22,6 +22,14 @@ bucket_name = "iot"
 [vars]
 TABLE_BUCKET_PREFIX = "iot/" # logical prefix for single-table style keys
 USER_JWT_SECRET = "gW9hRut/Zb4/6VTgAryuMaK4ObufeQonLJ2v3iJCezA="
+API_JWT_SECRET = "hX0jSvu/Ac5/7WUhBszuNbL5PcvgeRpoMK3w4kKDfzB="
+DEVICE_JWT_SECRET = "iY1kTwv/Bd6/8XViCtuOmCM6QdwhhSpqNL4x5lLEgzC="
+WORKSPACE_MASTER_JWT_SECRET = "jZ2lUxw/Ce7/9YWjDuvPnDN7ReximTqrOM5y6mMFh0D="
+SUPER_MASTER_JWT_SECRET = "kA3mVyx/Df8/0ZXkEvwQoEO8SfyjoUrsPnN6z7nNGi1E="
+# Email configuration (using MailChannels)
+EMAIL_FROM = "noreply@thebaycity.dev"
+EMAIL_FROM_NAME = "Thebaycity IoT"
+APP_URL = "https://thebaycity.dev"
 
 [triggers]
 crons = ["* * * * *"]  # every minute – drives schedule automations

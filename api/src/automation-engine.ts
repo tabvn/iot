@@ -1,5 +1,5 @@
-import type { Env } from "@/storage";
-import { getEntity } from "@/storage";
+import type { StorageEnv } from '@/db/storage';
+import { get, put, queryByPk } from '@/db/storage';
 import type {
   AutomationEntity,
   AutomationConditionGroup,
@@ -8,7 +8,18 @@ import type {
   DeviceEntity,
   AutomationActionConfig,
   ScheduleTriggerConfig,
-} from "@/models";
+  WorkspaceEntity,
+  AutomationLogEntity,
+  AutomationLogIndexEntity,
+  AutomationStatsEntity,
+  AutomationLogStatus,
+  ActionExecutionResult,
+  AutomationTriggerType,
+  WorkspacePlan,
+} from '@/db/types';
+import { Keys, EntityTypes } from '@/db/types';
+import { sendEmail, automationEmailHtml, automationEmailText, type EmailEnv } from '@/email';
+import { getPlanLimits } from '@/rate-limit';
 
 function evaluateCondition(cond: DeviceDataCondition, fields: Record<string, any>): boolean {
   const actual = fields[cond.field];
@@ -50,16 +61,17 @@ function evaluateConditionGroup(group: AutomationConditionGroup, fields: Record<
 }
 
 // Fetch the latest persisted device fields from R2 for condition evaluation.
-async function getDeviceFields(env: Env, workspaceId: string, deviceId: string): Promise<Record<string, any> | null> {
-  const entity = await getEntity<DeviceEntity>(env, `WS#${workspaceId}`, `DEV#${deviceId}`);
+async function getDeviceFields(env: StorageEnv, workspaceId: string, deviceId: string): Promise<Record<string, any> | null> {
+  const { pk, sk } = Keys.device(workspaceId, deviceId);
+  const entity = await get<DeviceEntity>(env, pk, sk);
   if (!entity) return null;
-  return (entity as unknown as Record<string, any>)["lastData"] as Record<string, any> | null;
+  return entity.lastData as Record<string, any> | null;
 }
 
 // Evaluate optional conditionGroups on an automation.
 // Returns true if no conditions, or all/any groups pass based on conditionLogic.
 async function evaluateConditionGroups(
-  env: Env,
+  env: StorageEnv,
   workspaceId: string,
   automation: AutomationEntity,
   knownDeviceFields?: { deviceId: string; fields: Record<string, any> }
@@ -92,7 +104,7 @@ async function evaluateConditionGroups(
 }
 
 export async function evaluateDeviceDataAutomations(
-  env: Env,
+  env: StorageEnv,
   workspaceId: string,
   automations: AutomationEntity[],
   deviceId: string,
@@ -118,7 +130,7 @@ export async function evaluateDeviceDataAutomations(
 }
 
 export async function evaluateDeviceStatusAutomations(
-  env: Env,
+  env: StorageEnv,
   workspaceId: string,
   automations: AutomationEntity[],
   deviceId: string,
@@ -142,13 +154,24 @@ export async function evaluateDeviceStatusAutomations(
   return results;
 }
 
-// Placeholder: in a real system, integrate HTTP fetch, email, device DO commands, etc.
+// Execute automation actions including HTTP fetch, email, device DO commands, etc.
 export async function executeActions(
-  env: Env,
+  env: StorageEnv & EmailEnv,
   workspaceId: string,
   actions: AutomationActionConfig[],
   context: Record<string, any>
 ) {
+  // Get workspace name for email context
+  let workspaceName = workspaceId;
+  let automationName = context.automationId || "Automation";
+  try {
+    const result = await queryByPk(env, `WS#${workspaceId}`);
+    const wsMeta = result.items.find((e: any) => e.sk === "METADATA") as WorkspaceEntity | undefined;
+    if (wsMeta) workspaceName = wsMeta.name;
+  } catch {
+    // Use workspaceId as fallback
+  }
+
   for (const action of actions) {
     // Optional per-action delay
     if (action.delayMs && action.delayMs > 0) {
@@ -193,9 +216,9 @@ export async function executeActions(
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    type: "set_field",
-                    field: action.field,
-                    value: action.value,
+                  type: "set_field",
+                  field: action.field,
+                  value: action.value,
                   context,
                 }),
               })
@@ -206,8 +229,27 @@ export async function executeActions(
           break;
         }
         case "send_email": {
-          // Stub: integrate with an email provider later
-          console.log("[automation][send_email]", { workspaceId, action, context });
+          const result = await sendEmail(env, {
+            to: action.to,
+            subject: action.subject,
+            html: automationEmailHtml({
+              subject: action.subject,
+              body: action.body,
+              workspaceName,
+              automationName,
+              context,
+            }),
+            text: automationEmailText({
+              subject: action.subject,
+              body: action.body,
+              workspaceName,
+              automationName,
+              context,
+            }),
+          });
+          if (!result.ok) {
+            console.error("[automation][send_email][error]", result.error);
+          }
           break;
         }
         case "delay": {
@@ -222,6 +264,253 @@ export async function executeActions(
       console.error("[automation][executeActions][error]", err);
     }
   }
+}
+
+// Like executeActions but returns per-action results for logging
+export async function executeActionsWithLogging(
+  env: StorageEnv & EmailEnv,
+  workspaceId: string,
+  actions: AutomationActionConfig[],
+  context: Record<string, any>
+): Promise<ActionExecutionResult[]> {
+  const results: ActionExecutionResult[] = [];
+
+  let workspaceName = workspaceId;
+  const automationName = context.automationId || "Automation";
+  try {
+    const result = await queryByPk(env, `WS#${workspaceId}`);
+    const wsMeta = result.items.find((e: any) => e.sk === "METADATA") as WorkspaceEntity | undefined;
+    if (wsMeta) workspaceName = wsMeta.name;
+  } catch {
+    // Use workspaceId as fallback
+  }
+
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i];
+    const start = Date.now();
+    let status: "success" | "failure" = "success";
+    let error: string | undefined;
+
+    if (action.delayMs && action.delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, action.delayMs));
+    }
+
+    try {
+      switch (action.type) {
+        case "log": {
+          console.log("[automation][log]", { workspaceId, action, context });
+          break;
+        }
+        case "send_webhook": {
+          const url = action.url;
+          const method = action.method ?? "POST";
+          const headers = {
+            "Content-Type": "application/json",
+            ...(action.headers ?? {}),
+          };
+          const bodyObj = {
+            ...(action.bodyTemplate ?? {}),
+            context,
+          };
+          const resp = await fetch(url, {
+            method,
+            headers,
+            body: method === "GET" ? undefined : JSON.stringify(bodyObj),
+          });
+          if (!resp.ok) {
+            status = "failure";
+            error = `HTTP ${resp.status}`;
+          }
+          break;
+        }
+        case "update_device": {
+          const targetDeviceId = action.targetDeviceId;
+          const anyEnv = env as any;
+          if (anyEnv.DEVICE_DO) {
+            const doName = `${workspaceId}:${targetDeviceId}`;
+            const id = anyEnv.DEVICE_DO.idFromName(doName);
+            const stub = anyEnv.DEVICE_DO.get(id);
+            const resp = await stub.fetch("https://device/control", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "set_field",
+                field: action.field,
+                value: action.value,
+                context,
+              }),
+            });
+            if (!resp.ok) {
+              status = "failure";
+              error = `Device control HTTP ${resp.status}`;
+            }
+          } else {
+            status = "failure";
+            error = "DEVICE_DO not available";
+          }
+          break;
+        }
+        case "send_email": {
+          const result = await sendEmail(env, {
+            to: action.to,
+            subject: action.subject,
+            html: automationEmailHtml({
+              subject: action.subject,
+              body: action.body,
+              workspaceName,
+              automationName,
+              context,
+            }),
+            text: automationEmailText({
+              subject: action.subject,
+              body: action.body,
+              workspaceName,
+              automationName,
+              context,
+            }),
+          });
+          if (!result.ok) {
+            status = "failure";
+            error = result.error;
+          }
+          break;
+        }
+        case "delay": {
+          const seconds = action.delaySeconds ?? 0;
+          if (seconds > 0) {
+            await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+          }
+          break;
+        }
+      }
+    } catch (err) {
+      status = "failure";
+      error = err instanceof Error ? err.message : String(err);
+    }
+
+    results.push({
+      actionIndex: i,
+      actionType: action.type,
+      status,
+      error,
+      durationMs: Date.now() - start,
+    });
+  }
+
+  return results;
+}
+
+// Persist execution log and update stats
+export async function recordExecutionLog(
+  env: StorageEnv,
+  workspaceId: string,
+  automation: AutomationEntity,
+  triggerType: AutomationTriggerType,
+  triggerData: Record<string, unknown>,
+  actionResults: ActionExecutionResult[],
+  totalDurationMs: number,
+  plan: WorkspacePlan
+): Promise<AutomationLogEntity> {
+  const now = new Date().toISOString();
+  const logId = crypto.randomUUID();
+
+  const hasFailure = actionResults.some((r) => r.status === "failure");
+  const allFailure = actionResults.length > 0 && actionResults.every((r) => r.status === "failure");
+  const status: AutomationLogStatus = allFailure
+    ? "failure"
+    : hasFailure
+      ? "partial_failure"
+      : "success";
+
+  const limits = getPlanLimits(plan);
+  const expiresAt =
+    typeof limits.ttlDays === "number"
+      ? new Date(Date.now() + limits.ttlDays * 24 * 60 * 60 * 1000).toISOString()
+      : undefined;
+
+  const logEntity: AutomationLogEntity = {
+    pk: `AUTO_LOG#${workspaceId}`,
+    sk: `${now}#${logId}`,
+    entityType: EntityTypes.AUTOMATION_LOG,
+    createdAt: now,
+    updatedAt: now,
+    logId,
+    workspaceId,
+    automationId: automation.automationId,
+    automationName: automation.name,
+    triggerType,
+    triggerData,
+    conditionsMatched: true,
+    status,
+    actionResults,
+    totalDurationMs,
+    expiresAt,
+  };
+
+  const indexEntity: AutomationLogIndexEntity = {
+    pk: `AUTO_LOG_IDX#${automation.automationId}`,
+    sk: `${now}#${logId}`,
+    entityType: EntityTypes.AUTOMATION_LOG,
+    createdAt: now,
+    updatedAt: now,
+    logId,
+    workspaceId,
+    automationId: automation.automationId,
+    status,
+    totalDurationMs,
+  };
+
+  await Promise.all([
+    put(env, logEntity),
+    put(env, indexEntity),
+  ]);
+
+  await updateAutomationStats(env, workspaceId, automation.automationId, status, totalDurationMs, now);
+
+  return logEntity;
+}
+
+async function updateAutomationStats(
+  env: StorageEnv,
+  workspaceId: string,
+  automationId: string,
+  status: AutomationLogStatus,
+  durationMs: number,
+  executionTime: string
+): Promise<void> {
+  const { pk, sk } = Keys.automationStats(workspaceId, automationId);
+  const existing = await get<AutomationStatsEntity>(env, pk, sk);
+
+  const now = new Date().toISOString();
+  const stats: AutomationStatsEntity = existing
+    ? { ...existing }
+    : {
+        pk,
+        sk,
+        entityType: EntityTypes.AUTOMATION_LOG,
+        createdAt: now,
+        updatedAt: now,
+        workspaceId,
+        automationId,
+        totalExecutions: 0,
+        successCount: 0,
+        failureCount: 0,
+        partialFailureCount: 0,
+        lastExecutionAt: null,
+        lastExecutionStatus: null,
+        totalDurationMs: 0,
+      };
+
+  stats.totalExecutions += 1;
+  if (status === "success") stats.successCount += 1;
+  else if (status === "failure") stats.failureCount += 1;
+  else stats.partialFailureCount += 1;
+  stats.lastExecutionAt = executionTime;
+  stats.lastExecutionStatus = status;
+  stats.totalDurationMs += durationMs;
+  stats.updatedAt = now;
+
+  await put(env, stats);
 }
 
 // Simple circular loop detection: if two automations are configured so that
@@ -398,7 +687,7 @@ export function nextCronMatch(cron: string, after: Date, timezone?: string): Dat
 }
 
 export async function evaluateScheduleAutomations(
-  env: Env,
+  env: StorageEnv,
   workspaceId: string,
   automations: AutomationEntity[],
   now: Date

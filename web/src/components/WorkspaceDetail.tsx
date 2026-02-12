@@ -17,14 +17,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiListDevices } from "@/lib/api";
-
-interface ApiDevice {
-  deviceId: string;
-  name: string;
-  type: string;
-  createdAt: string;
-}
+import { apiListDevices, type DeviceDetail } from "@/lib/api";
+import { ShowIf } from "@/lib/acl";
 
 export function WorkspaceDetail() {
   const params = useParams();
@@ -32,7 +26,7 @@ export function WorkspaceDetail() {
   const router = useRouter();
   const { token, isLoading: authLoading } = useAuth();
 
-  const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const [devices, setDevices] = useState<DeviceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,13 +72,15 @@ export function WorkspaceDetail() {
           <h1 className="text-3xl font-bold text-gray-900">{workspaceParam}</h1>
           <p className="text-gray-600 mt-1">Manage your IoT devices in this workspace</p>
         </div>
-        <Button
-          onClick={() => router.push(`/${workspaceParam}/devices/add`)}
-          className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2 shadow-lg hover:shadow-xl transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          Add Device
-        </Button>
+        <ShowIf permission="devices:create">
+          <Button
+            onClick={() => router.push(`/${workspaceParam}/devices/add`)}
+            className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2 shadow-lg hover:shadow-xl transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            Add Device
+          </Button>
+        </ShowIf>
       </div>
 
       {/* Stats Cards */}
@@ -106,7 +102,7 @@ export function WorkspaceDetail() {
             <div className="flex items-center justify-between mb-2">
               <Wifi className="w-8 h-8 opacity-80" />
               <div className="text-right">
-                <div className="text-3xl font-bold">0</div>
+                <div className="text-3xl font-bold">{devices.filter(d => d.status === "online").length}</div>
               </div>
             </div>
             <p className="text-sm font-medium text-green-100">Online</p>
@@ -118,7 +114,7 @@ export function WorkspaceDetail() {
             <div className="flex items-center justify-between mb-2">
               <WifiOff className="w-8 h-8 opacity-80" />
               <div className="text-right">
-                <div className="text-3xl font-bold">0</div>
+                <div className="text-3xl font-bold">{devices.filter(d => d.status === "offline").length}</div>
               </div>
             </div>
             <p className="text-sm font-medium text-gray-100">Offline</p>
@@ -130,10 +126,10 @@ export function WorkspaceDetail() {
             <div className="flex items-center justify-between mb-2">
               <AlertTriangle className="w-8 h-8 opacity-80" />
               <div className="text-right">
-                <div className="text-3xl font-bold">0</div>
+                <div className="text-3xl font-bold">{devices.filter(d => d.status === "error").length}</div>
               </div>
             </div>
-            <p className="text-sm font-medium text-orange-100">Warning</p>
+            <p className="text-sm font-medium text-orange-100">Error</p>
           </CardContent>
         </Card>
 
@@ -142,10 +138,10 @@ export function WorkspaceDetail() {
             <div className="flex items-center justify-between mb-2">
               <Zap className="w-8 h-8 opacity-80" />
               <div className="text-right">
-                <div className="text-3xl font-bold">0</div>
+                <div className="text-3xl font-bold">{devices.filter(d => d.fieldMappings && d.fieldMappings.length > 0).length}</div>
               </div>
             </div>
-            <p className="text-sm font-medium text-purple-100">Controllable</p>
+            <p className="text-sm font-medium text-purple-100">With Data</p>
           </CardContent>
         </Card>
       </div>
@@ -165,13 +161,15 @@ export function WorkspaceDetail() {
             <p className="text-gray-500 text-sm mb-6 max-w-md mx-auto">
               Add your first IoT device to start monitoring and controlling it from this workspace.
             </p>
-            <Button
-              onClick={() => router.push(`/${workspaceParam}/devices/add`)}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2 shadow-lg"
-            >
-              <Plus className="w-4 h-4" />
-              Add Your First Device
-            </Button>
+            <ShowIf permission="devices:create">
+              <Button
+                onClick={() => router.push(`/${workspaceParam}/devices/add`)}
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2 shadow-lg"
+              >
+                <Plus className="w-4 h-4" />
+                Add Your First Device
+              </Button>
+            </ShowIf>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -181,13 +179,28 @@ export function WorkspaceDetail() {
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex items-center gap-3 flex-1 min-w-0">
                       <div className="relative">
-                        <Wifi className="w-4 h-4 text-gray-400" />
+                        {device.status === "online" ? (
+                          <Wifi className="w-4 h-4 text-green-500" />
+                        ) : device.status === "error" ? (
+                          <AlertTriangle className="w-4 h-4 text-orange-500" />
+                        ) : (
+                          <WifiOff className="w-4 h-4 text-gray-400" />
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <CardTitle className="text-lg font-semibold text-gray-900 truncate">{device.name}</CardTitle>
-                          <Badge variant="secondary" className="bg-gray-100 text-gray-700 border-0 px-3 py-1">
-                            New
+                          <Badge
+                            variant="secondary"
+                            className={
+                              device.status === "online"
+                                ? "bg-green-100 text-green-700 border-0 px-3 py-1"
+                                : device.status === "error"
+                                ? "bg-orange-100 text-orange-700 border-0 px-3 py-1"
+                                : "bg-gray-100 text-gray-700 border-0 px-3 py-1"
+                            }
+                          >
+                            {device.status === "online" ? "Online" : device.status === "error" ? "Error" : "Offline"}
                           </Badge>
                         </div>
                         <CardDescription className="text-sm text-gray-500">{device.type}</CardDescription>
@@ -206,9 +219,9 @@ export function WorkspaceDetail() {
                     <div className="flex items-center gap-2">
                       <Clock className="w-4 h-4 text-gray-400" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs text-gray-500">Created</p>
+                        <p className="text-xs text-gray-500">{device.lastSeenAt ? "Last Seen" : "Created"}</p>
                         <p className="text-xs font-medium text-gray-700">
-                          {new Date(device.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          {new Date(device.lastSeenAt || device.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                         </p>
                       </div>
                     </div>

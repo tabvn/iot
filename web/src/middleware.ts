@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/", "/login", "/signup", "/forgot-password", "/terms", "/privacy", "/contact"];
+const PUBLIC_PATHS = ["/", "/login", "/signup", "/forgot-password", "/terms", "/developer","/privacy", "/contact"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -11,7 +11,9 @@ export function middleware(request: NextRequest) {
     PUBLIC_PATHS.includes(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api") ||
-    pathname.includes(".")
+    pathname.includes(".") ||
+    pathname.startsWith("/invite/") ||
+    /^\/[^/]+\/invite\//.test(pathname)
   ) {
     return NextResponse.next();
   }

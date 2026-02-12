@@ -2,11 +2,23 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Activity, Home, Zap, Wifi, Radio, Cpu, Network, Layers, ChevronDown, Plus, Settings, Users, Code, Sparkles, FileText, Bell, Search, Menu, X, Palette, CreditCard } from "lucide-react";
+import {
+  Cpu, Layers, ChevronDown, Plus, Code, Sparkles, FileText, Bell, Menu, X,
+  CheckCircle2, XCircle, AlertTriangle, Info, Check, CheckCheck, Loader2, Settings,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AvatarMenu } from "@/components/AvatarMenu";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiListWorkspaces } from "@/lib/api";
+// ACL hooks available if needed: import { useACL, ShowIf } from "@/lib/acl";
+import {
+  apiListWorkspaces,
+  apiGetUnreadCount,
+  apiListNotifications,
+  apiMarkNotificationRead,
+  apiMarkAllNotificationsRead,
+  type WorkspaceNotification,
+  type WorkspaceDetail,
+} from "@/lib/api";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,20 +27,17 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/Logo";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
-}
-
-interface ApiWorkspace {
-  workspaceId: string;
-  name: string;
-  slug: string;
-  description?: string;
-  createdAt: string;
 }
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
@@ -43,8 +52,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     ? null
     : pathParts[0];
 
-  const [workspaces, setWorkspaces] = useState<ApiWorkspace[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceDetail[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [recentNotifications, setRecentNotifications] = useState<WorkspaceNotification[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [markingId, setMarkingId] = useState<string | null>(null);
+  const [markingAll, setMarkingAll] = useState(false);
 
   useEffect(() => {
     if (authLoading || !token || !user) return;
@@ -52,6 +67,60 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       .then((res) => setWorkspaces(res.workspaces))
       .catch(() => {});
   }, [token, user, authLoading]);
+
+  const fetchUnread = () => {
+    if (!token || !workspace) return;
+    apiGetUnreadCount(token, workspace)
+      .then((res) => setUnreadCount(res.unreadCount))
+      .catch(() => {});
+  };
+
+  const fetchRecentNotifications = () => {
+    if (!token || !workspace) return;
+    setNotifLoading(true);
+    apiListNotifications(token, workspace, { limit: 8 })
+      .then((res) => setRecentNotifications(res.notifications))
+      .catch(() => {})
+      .finally(() => setNotifLoading(false));
+  };
+
+  useEffect(() => {
+    if (authLoading || !token || !workspace) return;
+    fetchUnread();
+    const interval = setInterval(fetchUnread, 30000);
+    return () => clearInterval(interval);
+  }, [token, workspace, authLoading]);
+
+  // Fetch recent notifications when dropdown opens
+  useEffect(() => {
+    if (notifOpen) fetchRecentNotifications();
+  }, [notifOpen]);
+
+  const handleMarkRead = async (notificationId: string) => {
+    if (!token || !workspace) return;
+    setMarkingId(notificationId);
+    try {
+      await apiMarkNotificationRead(token, workspace, notificationId);
+      setRecentNotifications((prev) =>
+        prev.map((n) =>
+          n.notificationId === notificationId ? { ...n, read: true, readAt: new Date().toISOString() } : n
+        )
+      );
+      fetchUnread();
+    } catch {}
+    setMarkingId(null);
+  };
+
+  const handleMarkAllRead = async () => {
+    if (!token || !workspace) return;
+    setMarkingAll(true);
+    try {
+      await apiMarkAllNotificationsRead(token, workspace);
+      setRecentNotifications((prev) => prev.map((n) => ({ ...n, read: true, readAt: new Date().toISOString() })));
+      setUnreadCount(0);
+    } catch {}
+    setMarkingAll(false);
+  };
 
   const currentWorkspace = workspace
     ? workspaces.find(w => w.slug === workspace || w.workspaceId === workspace)
@@ -238,15 +307,126 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
             {/* Right: Actions */}
             <div className="flex items-center gap-2">
-              {/* Notifications */}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="relative hover:bg-gray-100 rounded-lg"
-              >
-                <Bell className="w-5 h-5 text-gray-600" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
-              </Button>
+              {/* Notifications Dropdown */}
+              {workspace && (
+                <Popover open={notifOpen} onOpenChange={setNotifOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="relative hover:bg-gray-100 rounded-lg"
+                    >
+                      <Bell className="w-5 h-5 text-gray-600" />
+                      {unreadCount > 0 && (
+                        <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] bg-red-500 rounded-full border-2 border-white flex items-center justify-center">
+                          <span className="text-[10px] font-bold text-white leading-none">
+                            {unreadCount > 99 ? "99+" : unreadCount}
+                          </span>
+                        </span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-96 p-0 shadow-2xl border-gray-200">
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b bg-gradient-to-r from-blue-50 to-purple-50">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-gray-900">Notifications</h3>
+                        {unreadCount > 0 && (
+                          <Badge className="bg-red-500 text-white text-[10px] px-1.5 py-0 h-5">
+                            {unreadCount}
+                          </Badge>
+                        )}
+                      </div>
+                      {unreadCount > 0 && (
+                        <button
+                          onClick={handleMarkAllRead}
+                          disabled={markingAll}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 disabled:opacity-50"
+                        >
+                          {markingAll ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <CheckCheck className="w-3 h-3" />
+                          )}
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Notification List */}
+                    <div className="max-h-[400px] overflow-y-auto">
+                      {notifLoading ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                        </div>
+                      ) : recentNotifications.length === 0 ? (
+                        <div className="py-10 text-center">
+                          <Bell className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                          <p className="text-sm text-gray-500">No notifications yet</p>
+                        </div>
+                      ) : (
+                        recentNotifications.map((n) => (
+                          <div
+                            key={n.notificationId}
+                            className={`flex items-start gap-3 px-4 py-3 border-b border-gray-100 last:border-0 hover:bg-gray-50/80 transition-colors ${
+                              !n.read ? "bg-blue-50/40" : ""
+                            }`}
+                          >
+                            <div className="mt-0.5 shrink-0">
+                              {n.severity === "success" && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                              {n.severity === "error" && <XCircle className="w-4 h-4 text-red-500" />}
+                              {n.severity === "warning" && <AlertTriangle className="w-4 h-4 text-yellow-500" />}
+                              {n.severity === "info" && <Info className="w-4 h-4 text-blue-500" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-xs leading-snug ${!n.read ? "font-semibold text-gray-900" : "text-gray-600"}`}>
+                                {n.title}
+                              </p>
+                              <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.message}</p>
+                              <p className="text-[10px] text-gray-400 mt-1">
+                                {(() => {
+                                  const ms = Date.now() - new Date(n.createdAt).getTime();
+                                  const m = Math.floor(ms / 60000);
+                                  if (m < 1) return "Just now";
+                                  if (m < 60) return `${m}m ago`;
+                                  const h = Math.floor(m / 60);
+                                  if (h < 24) return `${h}h ago`;
+                                  return `${Math.floor(h / 24)}d ago`;
+                                })()}
+                              </p>
+                            </div>
+                            {!n.read && (
+                              <button
+                                onClick={() => handleMarkRead(n.notificationId)}
+                                disabled={markingId === n.notificationId}
+                                className="shrink-0 mt-0.5 text-gray-400 hover:text-blue-600 transition-colors disabled:opacity-50"
+                                title="Mark as read"
+                              >
+                                {markingId === n.notificationId ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Check className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Footer */}
+                    <div className="border-t border-gray-100 px-4 py-2.5 bg-gray-50/50">
+                      <Link
+                        href={`/${workspace}/settings/notifications`}
+                        onClick={() => setNotifOpen(false)}
+                        className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors flex items-center justify-center gap-1"
+                      >
+                        View all notifications
+                      </Link>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              )}
 
               <div className="hidden sm:block w-px h-6 bg-gray-300 mx-1" />
 

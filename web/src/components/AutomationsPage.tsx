@@ -7,7 +7,7 @@ import useSWR from "swr";
 import useSWRMutation from "swr/mutation";
 import {
   Plus, Zap, Webhook, Trash2, Edit, ArrowLeft, GitBranch, Bell, Clock, Activity,
-  Copy, Loader2, AlertCircle, Database, Calendar, Wifi,
+  Copy, Loader2, AlertCircle, Database, Calendar, Wifi, FileText, CheckCircle, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,16 +21,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { ShowIf } from "@/lib/acl";
 import {
   apiListAutomations,
   apiUpdateAutomation,
   apiDeleteAutomation,
+  apiListAutomationStats,
   type Automation,
+  type AutomationStats,
 } from "@/lib/api";
 
 // SWR fetchers
 async function automationsFetcher([, token, workspaceSlug]: [string, string, string]) {
   return apiListAutomations(token, workspaceSlug);
+}
+
+async function statsFetcher([, token, workspaceSlug]: [string, string, string]) {
+  return apiListAutomationStats(token, workspaceSlug);
 }
 
 async function updateAutomationFetcher(
@@ -109,6 +116,16 @@ export function AutomationsPage() {
   );
 
   const automations = automationsData?.automations ?? [];
+
+  // Fetch stats for all automations
+  const { data: statsData } = useSWR(
+    token && workspace ? ["automation-stats", token, workspace] : null,
+    statsFetcher,
+    { revalidateOnFocus: false }
+  );
+  const statsMap = new Map<string, AutomationStats>(
+    (statsData?.stats ?? []).map((s) => [s.automationId, s])
+  );
 
   // Update mutation
   const { trigger: triggerUpdate, isMutating: isUpdating } = useSWRMutation(
@@ -299,13 +316,15 @@ export function AutomationsPage() {
               <h3 className="text-xl font-bold text-gray-900">Automation Rules</h3>
               <p className="text-sm text-gray-500 mt-1">Create conditional rules to automate device actions</p>
             </div>
-            <Button
-              onClick={() => router.push(`/${workspace}/automations/create`)}
-              className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Create Rule
-            </Button>
+            <ShowIf permission="automations:create">
+              <Button
+                onClick={() => router.push(`/${workspace}/automations/create`)}
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Create Rule
+              </Button>
+            </ShowIf>
           </div>
 
           {/* Rules List */}
@@ -318,13 +337,15 @@ export function AutomationsPage() {
                   <p className="text-sm text-gray-500 mb-4">
                     Create your first rule to automate device actions based on triggers.
                   </p>
-                  <Button
-                    onClick={() => router.push(`/${workspace}/automations/create`)}
-                    className="gap-2"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Create Rule
-                  </Button>
+                  <ShowIf permission="automations:create">
+                    <Button
+                      onClick={() => router.push(`/${workspace}/automations/create`)}
+                      className="gap-2"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Create Rule
+                    </Button>
+                  </ShowIf>
                 </CardContent>
               </Card>
             ) : (
@@ -369,6 +390,41 @@ export function AutomationsPage() {
                       </div>
                     </div>
 
+                    {/* Stats row */}
+                    {(() => {
+                      const stats = statsMap.get(automation.automationId);
+                      if (stats && stats.totalExecutions > 0) {
+                        return (
+                          <div className="flex items-center gap-4 text-xs text-gray-500">
+                            <div className="flex items-center gap-1">
+                              <Activity className="w-3 h-3" />
+                              <span>{stats.totalExecutions} run{stats.totalExecutions !== 1 ? "s" : ""}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <CheckCircle className="w-3 h-3 text-green-500" />
+                              <span>{stats.successCount}</span>
+                            </div>
+                            {stats.failureCount > 0 && (
+                              <div className="flex items-center gap-1">
+                                <XCircle className="w-3 h-3 text-red-500" />
+                                <span>{stats.failureCount}</span>
+                              </div>
+                            )}
+                            <div className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              <span>avg {stats.averageDurationMs}ms</span>
+                            </div>
+                            {stats.lastExecutionAt && (
+                              <div className="text-gray-400">
+                                Last: {new Date(stats.lastExecutionAt).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+
                     <div className="flex items-center justify-between pt-2 border-t">
                       <div className="flex items-center gap-6 text-sm">
                         <div className="flex items-center gap-2">
@@ -382,22 +438,35 @@ export function AutomationsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="gap-2"
-                          onClick={() => router.push(`/${workspace}/automations/${automation.automationId}/edit`)}
+                          className="gap-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                          onClick={() => router.push(`/${workspace}/automations/${automation.automationId}/logs`)}
                         >
-                          <Edit className="w-4 h-4" />
+                          <FileText className="w-4 h-4" />
+                          Logs
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
-                          onClick={() => {
-                            setAutomationToDelete(automation.automationId);
-                            setDeleteDialogOpen(true);
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        <ShowIf permission="automations:edit">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="gap-2"
+                            onClick={() => router.push(`/${workspace}/automations/${automation.automationId}/edit`)}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        </ShowIf>
+                        <ShowIf permission="automations:delete">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => {
+                              setAutomationToDelete(automation.automationId);
+                              setDeleteDialogOpen(true);
+                            }}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </ShowIf>
                       </div>
                     </div>
                   </CardContent>

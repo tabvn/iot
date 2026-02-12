@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiUpdateUser } from "@/lib/api";
 import { useEffect, useState } from "react";
+import {cn} from "@/components/ui/utils";
 
 interface AccountFormValues {
   name: string;
@@ -47,7 +48,7 @@ export function AccountPage() {
   }, [user, reset]);
 
   // SWR mutation for updating user
-  const { trigger: mutateUser, isMutating } = useSWRMutation(
+  const { trigger: mutateUser, isMutating, error: isError } = useSWRMutation(
     token && user ? ["user", user.id] : null,
     async (_key, { arg }: { arg: AccountFormValues }) => {
       if (!token || !user) throw new Error("Not authenticated");
@@ -172,7 +173,9 @@ export function AccountPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="email">Email Address</Label>
-                  <Input id="email" type="email" {...register("email")} className="h-11" />
+                  <Input id="email" type="email" {...register("email")} className={
+                    cn("h-11", isError ? "border-red-500" : "")
+                  } />
                 </div>
               </div>
 

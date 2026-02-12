@@ -8,6 +8,7 @@ import {
   AlertCircle, CheckCircle2, Loader2,
   Wifi, BarChart3, LineChart, FileJson, Search, X, Copy, Check,
   ChevronDown, ChevronUp, Table, RefreshCw, Pencil,
+  Key, Shield, RotateCw, Trash2, Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +17,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   LineChart as ReLineChart,
@@ -35,10 +44,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import {
   apiGetDevice,
   apiGetDeviceAnalytics,
+  apiGetDeviceApiKey,
+  apiCreateDeviceApiKey,
+  apiRevokeDeviceApiKey,
   type DeviceDetail,
   type AnalyticsResponse,
   type AnalyticsPoint,
+  type DeviceApiKeyInfo,
 } from "@/lib/api";
+import { ShowIf } from "@/lib/acl";
 
 // ============================================================================
 // Chart color palette
@@ -88,6 +102,39 @@ function analyticsFetcher([, token, slug, id, from, to, cursor, limit]: [string,
   });
 }
 
+function deviceApiKeyFetcher([, token, slug, id]: [string, string, string, string]) {
+  return apiGetDeviceApiKey(token, slug, id);
+}
+
+// ============================================================================
+// CodeBlock — inline copy-to-clipboard code viewer
+// ============================================================================
+
+function ConnectCodeBlock({ code, language = "bash" }: { code: string; language?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    toast.success("Copied to clipboard");
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={copy}
+        className="absolute top-2 right-2 p-2 bg-gray-700 hover:bg-gray-600 rounded transition-colors z-10"
+      >
+        {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4 text-gray-400" />}
+      </button>
+      <pre className="bg-gray-900 text-gray-300 p-4 rounded-lg overflow-x-auto text-xs leading-relaxed">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -109,6 +156,10 @@ export function DeviceAnalytics() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortField, setSortField] = useState<string>("timestamp");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
+  const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
+  const [keyActionLoading, setKeyActionLoading] = useState(false);
+  const [codeTab, setCodeTab] = useState<"javascript" | "go" | "cpp" | "esp32">("javascript");
 
   // Compute from/to based on time range — stabilize to minute boundary to avoid
   // SWR key changing every millisecond and causing infinite re-fetches.
@@ -151,6 +202,16 @@ export function DeviceAnalytics() {
       ? ["analytics", token, workspaceSlug, deviceId, fromDate ?? "", toDate ?? "", "", "500"]
       : null,
     analyticsFetcher,
+    { revalidateOnFocus: false },
+  );
+
+  // ---- SWR: Device API key ----
+  const {
+    data: deviceKeyInfo,
+    mutate: mutateDeviceKey,
+  } = useSWR<DeviceApiKeyInfo>(
+    token && workspaceSlug && deviceId ? ["deviceKey", token, workspaceSlug, deviceId] : null,
+    deviceApiKeyFetcher,
     { revalidateOnFocus: false },
   );
 
@@ -335,6 +396,38 @@ export function DeviceAnalytics() {
     },
     [sortField],
   );
+
+  // ---- Device API Key handlers ----
+
+  const handleGenerateKey = useCallback(async () => {
+    if (!token) return;
+    setKeyActionLoading(true);
+    try {
+      const result = await apiCreateDeviceApiKey(token, workspaceSlug, deviceId);
+      setNewKeyValue(result.key);
+      mutateDeviceKey();
+      toast.success("Device API key generated");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to generate API key");
+    } finally {
+      setKeyActionLoading(false);
+    }
+  }, [token, workspaceSlug, deviceId, mutateDeviceKey]);
+
+  const handleRevokeKey = useCallback(async () => {
+    if (!token) return;
+    setKeyActionLoading(true);
+    try {
+      await apiRevokeDeviceApiKey(token, workspaceSlug, deviceId);
+      mutateDeviceKey();
+      setShowRevokeConfirm(false);
+      toast.success("Device API key revoked");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to revoke API key");
+    } finally {
+      setKeyActionLoading(false);
+    }
+  }, [token, workspaceSlug, deviceId, mutateDeviceKey]);
 
   // ---- Loading / Error states ----
 
@@ -547,7 +640,7 @@ export function DeviceAnalytics() {
           {/* Main Tabs */}
           <Tabs defaultValue="table" className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-2">
-              <TabsList className="bg-transparent p-0 border-0 h-auto gap-2 w-full grid grid-cols-4">
+              <TabsList className="bg-transparent p-0 border-0 h-auto gap-2 w-full grid grid-cols-5">
                 <TabsTrigger
                   value="table"
                   className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-blue-600 data-[state=active]:text-white rounded-xl px-2 sm:px-4 py-2 sm:py-3 gap-1 sm:gap-2"
@@ -579,6 +672,14 @@ export function DeviceAnalytics() {
                   <Activity className="w-4 h-4" />
                   <span className="hidden sm:inline text-sm">Health</span>
                   <span className="sm:hidden text-xs">Health</span>
+                </TabsTrigger>
+                <TabsTrigger
+                  value="connect"
+                  className="data-[state=active]:bg-gradient-to-r data-[state=active]:from-teal-500 data-[state=active]:to-teal-600 data-[state=active]:text-white rounded-xl px-2 sm:px-4 py-2 sm:py-3 gap-1 sm:gap-2"
+                >
+                  <Key className="w-4 h-4" />
+                  <span className="hidden sm:inline text-sm">Connect</span>
+                  <span className="sm:hidden text-xs">Connect</span>
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -1244,9 +1345,691 @@ export function DeviceAnalytics() {
                 </Card>
               )}
             </TabsContent>
+
+            {/* ============================================================ */}
+            {/* Connect Tab — API Key + Quick Start Guides */}
+            {/* ============================================================ */}
+            <TabsContent value="connect" className="space-y-6">
+              {/* Device API Key Management */}
+              <Card className="border border-gray-200">
+                <CardHeader>
+                  <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                    <Key className="w-5 h-5 text-teal-600" />
+                    Device API Key
+                  </CardTitle>
+                  <CardDescription>
+                    This key allows the device to connect via WebSocket and send data. It only has access to this device.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {deviceKeyInfo?.hasKey ? (
+                    <div className="space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="w-10 h-10 rounded-lg bg-teal-100 flex items-center justify-center flex-shrink-0">
+                            <Shield className="w-5 h-5 text-teal-600" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-900">{deviceKeyInfo.name}</p>
+                            <p className="text-xs text-gray-500 font-mono">{deviceKeyInfo.keyPrefix}...</p>
+                            {deviceKeyInfo.createdAt && (
+                              <p className="text-xs text-gray-400 mt-0.5">
+                                Created {new Date(deviceKeyInfo.createdAt).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <ShowIf permission="devices:edit">
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleGenerateKey}
+                              disabled={keyActionLoading}
+                              className="gap-1.5"
+                            >
+                              {keyActionLoading ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <RotateCw className="w-3.5 h-3.5" />
+                              )}
+                              Regenerate
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setShowRevokeConfirm(true)}
+                              disabled={keyActionLoading}
+                              className="gap-1.5 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Revoke
+                            </Button>
+                          </div>
+                        </ShowIf>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                        <Key className="w-8 h-8 text-gray-400" />
+                      </div>
+                      <p className="text-sm text-gray-600 mb-4">
+                        No API key has been generated for this device yet.
+                      </p>
+                      <ShowIf permission="devices:edit">
+                        <Button
+                          onClick={handleGenerateKey}
+                          disabled={keyActionLoading}
+                          className="bg-gradient-to-r from-teal-500 to-teal-600 gap-2"
+                        >
+                          {keyActionLoading ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Key className="w-4 h-4" />
+                          )}
+                          Generate API Key
+                        </Button>
+                      </ShowIf>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Quick Start Code Guides */}
+              <Card className="border border-gray-200">
+                <CardHeader>
+                  <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                    <Terminal className="w-5 h-5 text-teal-600" />
+                    Quick Start Guide
+                  </CardTitle>
+                  <CardDescription>
+                    Code examples for connecting this device. Replace <code className="bg-gray-100 px-1 rounded text-xs">YOUR_DEVICE_API_KEY</code> with your device API key.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {/* Language tabs */}
+                  <div className="flex flex-wrap gap-2 mb-6">
+                    {(["javascript", "go", "cpp", "esp32"] as const).map((lang) => (
+                      <Button
+                        key={lang}
+                        variant={codeTab === lang ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setCodeTab(lang)}
+                        className={codeTab === lang ? "bg-teal-600 hover:bg-teal-700" : ""}
+                      >
+                        {lang === "javascript" ? "JavaScript" : lang === "go" ? "Go" : lang === "cpp" ? "C++" : "ESP32"}
+                      </Button>
+                    ))}
+                  </div>
+
+                  {/* JavaScript */}
+                  {codeTab === "javascript" && (
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">HTTP Data Ingestion</h4>
+                        <p className="text-xs text-gray-600 mb-3">Send sensor data via HTTP POST request.</p>
+                        <ConnectCodeBlock language="javascript" code={`const DEVICE_ID = "${deviceId}";
+const API_KEY = "YOUR_DEVICE_API_KEY";
+const API_URL = "https://api.thebaycity.dev";
+
+async function sendData(data) {
+  const res = await fetch(
+    \`\${API_URL}/devices/\${DEVICE_ID}/ingest\`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": \`Bearer \${API_KEY}\`,
+      },
+      body: JSON.stringify(data),
+    }
+  );
+  const result = await res.json();
+  console.log("Ingest result:", result);
+}
+
+// Example: send sensor readings every 30s
+setInterval(() => {
+  sendData({
+    temperature: 22.5 + Math.random() * 5,
+    humidity: 60 + Math.random() * 20,
+  });
+}, 30000);`} />
+                      </div>
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">WebSocket (Real-time)</h4>
+                        <p className="text-xs text-gray-600 mb-3">Maintain a persistent connection for real-time data streaming.</p>
+                        <ConnectCodeBlock language="javascript" code={`const DEVICE_ID = "${deviceId}";
+const API_KEY = "YOUR_DEVICE_API_KEY";
+
+const ws = new WebSocket(
+  \`wss://api.thebaycity.dev/ws/devices/\${DEVICE_ID}?token=\${API_KEY}\`
+);
+
+ws.onopen = () => {
+  console.log("Connected to device WebSocket");
+};
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === "ping") {
+    ws.send(JSON.stringify({ type: "pong" }));
+  } else if (msg.type === "ack") {
+    console.log("Data acknowledged at:", msg.at);
+  }
+};
+
+ws.onerror = (err) => console.error("WebSocket error:", err);
+ws.onclose = () => console.log("Disconnected — reconnecting...");
+
+// Send data via WebSocket
+function sendData(data) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(data));
+  }
+}
+
+// Example: send every 30s
+setInterval(() => {
+  sendData({ temperature: 22.5, humidity: 65 });
+}, 30000);`} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Go */}
+                  {codeTab === "go" && (
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">HTTP Data Ingestion</h4>
+                        <p className="text-xs text-gray-600 mb-3">Send sensor data using Go&apos;s standard library.</p>
+                        <ConnectCodeBlock language="go" code={`package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+const (
+	deviceID = "${deviceId}"
+	apiKey   = "YOUR_DEVICE_API_KEY"
+	apiURL   = "https://api.thebaycity.dev"
+)
+
+type SensorData struct {
+	Temperature float64 \`json:"temperature"\`
+	Humidity    float64 \`json:"humidity"\`
+}
+
+func sendData(data SensorData) error {
+	body, _ := json.Marshal(data)
+	req, _ := http.NewRequest("POST",
+		fmt.Sprintf("%s/devices/%s/ingest", apiURL, deviceID),
+		bytes.NewReader(body),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	fmt.Printf("Status: %d\\n", resp.StatusCode)
+	return nil
+}
+
+func main() {
+	ticker := time.NewTicker(30 * time.Second)
+	for range ticker.C {
+		sendData(SensorData{
+			Temperature: 22.5,
+			Humidity:    65.0,
+		})
+	}
+}`} />
+                      </div>
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">WebSocket (Real-time)</h4>
+                        <p className="text-xs text-gray-600 mb-3">Using gorilla/websocket for persistent connections.</p>
+                        <ConnectCodeBlock language="go" code={`package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/url"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+const (
+	deviceID = "${deviceId}"
+	apiKey   = "YOUR_DEVICE_API_KEY"
+)
+
+func main() {
+	u := url.URL{
+		Scheme:   "wss",
+		Host:     "api.thebaycity.dev",
+		Path:     fmt.Sprintf("/ws/devices/%s", deviceID),
+		RawQuery: "token=" + apiKey,
+	}
+
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		log.Fatal("dial:", err)
+	}
+	defer conn.Close()
+	fmt.Println("Connected!")
+
+	// Read messages in background
+	go func() {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				log.Println("read:", err)
+				return
+			}
+			var data map[string]interface{}
+			json.Unmarshal(msg, &data)
+			if data["type"] == "ping" {
+				conn.WriteJSON(map[string]string{"type": "pong"})
+			} else {
+				fmt.Printf("Received: %s\\n", msg)
+			}
+		}
+	}()
+
+	// Send data every 30s
+	ticker := time.NewTicker(30 * time.Second)
+	for range ticker.C {
+		payload := map[string]float64{
+			"temperature": 22.5,
+			"humidity":    65.0,
+		}
+		conn.WriteJSON(payload)
+	}
+}`} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* C++ */}
+                  {codeTab === "cpp" && (
+                    <div className="space-y-6">
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">HTTP Data Ingestion (ESP8266/ESP32)</h4>
+                        <p className="text-xs text-gray-600 mb-3">Send data using Arduino HTTPClient library.</p>
+                        <ConnectCodeBlock language="cpp" code={`#include <WiFi.h>          // ESP32
+// #include <ESP8266WiFi.h> // ESP8266
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+const char* DEVICE_ID = "${deviceId}";
+const char* API_KEY = "YOUR_DEVICE_API_KEY";
+const char* API_HOST = "https://api.thebaycity.dev";
+
+WiFiClientSecure client;
+
+void sendData(float temperature, float humidity) {
+  client.setInsecure(); // skip cert verification
+
+  HTTPClient http;
+  String url = String(API_HOST) + "/devices/" + DEVICE_ID + "/ingest";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + API_KEY);
+
+  String payload = "{\\"temperature\\":" + String(temperature) +
+                   ",\\"humidity\\":" + String(humidity) + "}";
+
+  int code = http.POST(payload);
+  Serial.printf("HTTP %d: %s\\n", code, http.getString().c_str());
+  http.end();
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin("YOUR_SSID", "YOUR_PASSWORD");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\\nWiFi connected!");
+}
+
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
+    sendData(22.5, 65.0); // replace with sensor readings
+  }
+  delay(30000); // send every 30s
+}`} />
+                      </div>
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">WebSocket (Real-time)</h4>
+                        <p className="text-xs text-gray-600 mb-3">Using WebSocketsClient library for persistent connections.</p>
+                        <ConnectCodeBlock language="cpp" code={`#include <WiFi.h>          // ESP32
+// #include <ESP8266WiFi.h> // ESP8266
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
+
+const char* DEVICE_ID = "${deviceId}";
+const char* API_KEY = "YOUR_DEVICE_API_KEY";
+
+WebSocketsClient webSocket;
+unsigned long lastSend = 0;
+
+void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.println("WebSocket connected!");
+      break;
+    case WStype_TEXT: {
+      JsonDocument doc;
+      deserializeJson(doc, payload, length);
+      if (doc["type"] == "ping") {
+        webSocket.sendTXT("{\\"type\\":\\"pong\\"}");
+      } else if (doc["type"] == "ack") {
+        Serial.printf("ACK at %s\\n", doc["at"].as<const char*>());
+      }
+      break;
+    }
+    case WStype_DISCONNECTED:
+      Serial.println("WebSocket disconnected!");
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  WiFi.begin("YOUR_SSID", "YOUR_PASSWORD");
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+
+  String path = String("/ws/devices/") + DEVICE_ID + "?token=" + API_KEY;
+  webSocket.beginSSL("api.thebaycity.dev", 443, path.c_str());
+  webSocket.onEvent(webSocketEvent);
+  webSocket.setReconnectInterval(5000);
+}
+
+void loop() {
+  webSocket.loop();
+
+  if (millis() - lastSend > 30000) {
+    lastSend = millis();
+    JsonDocument doc;
+    doc["temperature"] = 22.5; // replace with sensor reading
+    doc["humidity"] = 65.0;
+    String json;
+    serializeJson(doc, json);
+    webSocket.sendTXT(json);
+  }
+}`} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ESP32 Complete Example */}
+                  {codeTab === "esp32" && (
+                    <div className="space-y-6">
+                      <div className="p-4 bg-orange-50 rounded-lg border border-orange-200">
+                        <h4 className="font-semibold text-orange-900 mb-2">Requirements</h4>
+                        <ul className="text-sm text-orange-800 list-disc list-inside space-y-1">
+                          <li>Arduino IDE with ESP32 board support</li>
+                          <li>ArduinoJson library (v7+)</li>
+                          <li>WebSocketsClient library (Links2004)</li>
+                          <li>DHT sensor library (optional, for sensor example)</li>
+                        </ul>
+                      </div>
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">Complete ESP32 + DHT22 Example</h4>
+                        <p className="text-xs text-gray-600 mb-3">
+                          Reads temperature &amp; humidity from a DHT22 sensor and sends data every 30 seconds via HTTP.
+                        </p>
+                        <ConnectCodeBlock language="cpp" code={`#include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+
+// ---- Configuration ----
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* DEVICE_ID     = "${deviceId}";
+const char* API_KEY       = "YOUR_DEVICE_API_KEY";
+const char* API_HOST      = "https://api.thebaycity.dev";
+
+// DHT sensor
+#define DHT_PIN 4
+#define DHT_TYPE DHT22
+DHT dht(DHT_PIN, DHT_TYPE);
+
+WiFiClientSecure client;
+unsigned long lastSend = 0;
+const unsigned long INTERVAL = 30000; // 30s
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  // Connect to WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.printf("\\nConnected! IP: %s\\n", WiFi.localIP().toString().c_str());
+
+  client.setInsecure();
+}
+
+void loop() {
+  if (millis() - lastSend < INTERVAL) return;
+  lastSend = millis();
+
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+
+  if (isnan(temp) || isnan(hum)) {
+    Serial.println("Failed to read DHT sensor");
+    return;
+  }
+
+  // Build JSON payload
+  JsonDocument doc;
+  doc["temperature"] = temp;
+  doc["humidity"] = hum;
+  String payload;
+  serializeJson(doc, payload);
+
+  // Send to API
+  HTTPClient http;
+  String url = String(API_HOST) + "/devices/" + DEVICE_ID + "/ingest";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", String("Bearer ") + API_KEY);
+
+  int code = http.POST(payload);
+  if (code > 0) {
+    Serial.printf("Sent! HTTP %d — temp=%.1f°C hum=%.1f%%\\n", code, temp, hum);
+  } else {
+    Serial.printf("Error: %s\\n", http.errorToString(code).c_str());
+  }
+  http.end();
+}`} />
+                      </div>
+
+                      <div>
+                        <h4 className="text-sm font-semibold text-gray-900 mb-2">ESP32 WebSocket (Real-time)</h4>
+                        <p className="text-xs text-gray-600 mb-3">
+                          Persistent WebSocket connection with automatic reconnect and ping/pong handling.
+                        </p>
+                        <ConnectCodeBlock language="cpp" code={`#include <WiFi.h>
+#include <WebSocketsClient.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* DEVICE_ID     = "${deviceId}";
+const char* API_KEY       = "YOUR_DEVICE_API_KEY";
+
+#define DHT_PIN 4
+#define DHT_TYPE DHT22
+DHT dht(DHT_PIN, DHT_TYPE);
+
+WebSocketsClient ws;
+unsigned long lastSend = 0;
+bool connected = false;
+
+void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.println("WS connected!");
+      connected = true;
+      break;
+    case WStype_DISCONNECTED:
+      Serial.println("WS disconnected");
+      connected = false;
+      break;
+    case WStype_TEXT: {
+      JsonDocument doc;
+      deserializeJson(doc, payload, length);
+      const char* msgType = doc["type"];
+      if (strcmp(msgType, "ping") == 0) {
+        ws.sendTXT("{\\"type\\":\\"pong\\"}");
+      }
+      break;
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("WiFi connected!");
+
+  String path = String("/ws/devices/") + DEVICE_ID + "?token=" + API_KEY;
+  ws.beginSSL("api.thebaycity.dev", 443, path.c_str());
+  ws.onEvent(onWsEvent);
+  ws.setReconnectInterval(5000);
+}
+
+void loop() {
+  ws.loop();
+
+  if (connected && millis() - lastSend > 30000) {
+    lastSend = millis();
+    float temp = dht.readTemperature();
+    float hum = dht.readHumidity();
+    if (!isnan(temp) && !isnan(hum)) {
+      JsonDocument doc;
+      doc["temperature"] = temp;
+      doc["humidity"] = hum;
+      String json;
+      serializeJson(doc, json);
+      ws.sendTXT(json);
+      Serial.printf("Sent: %.1f°C %.1f%%\\n", temp, hum);
+    }
+  }
+}`} />
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
           </Tabs>
         </div>
       </div>
+
+      {/* ---- Dialogs ---- */}
+
+      {/* New API Key Dialog */}
+      <Dialog open={!!newKeyValue} onOpenChange={(open) => { if (!open) setNewKeyValue(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-teal-700">
+              <CheckCircle2 className="w-5 h-5" />
+              Device API Key Generated
+            </DialogTitle>
+            <DialogDescription>
+              Copy this key now — it will not be shown again.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+              <p className="text-sm text-yellow-800">
+                <strong>Important:</strong> Store this key securely. You will not be able to see the full key again after closing this dialog.
+              </p>
+            </div>
+            <label className="text-sm font-semibold mb-2 block text-gray-700">API Key</label>
+            <div className="flex items-center gap-2 bg-gray-900 text-green-400 p-3 rounded-lg font-mono text-sm">
+              <code className="flex-1 break-all text-xs select-all">{newKeyValue}</code>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-gray-300 hover:text-white hover:bg-gray-800 flex-shrink-0"
+                onClick={() => {
+                  if (newKeyValue) {
+                    navigator.clipboard.writeText(newKeyValue);
+                    toast.success("API key copied to clipboard");
+                  }
+                }}
+              >
+                <Copy className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setNewKeyValue(null)} className="w-full">
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revoke Confirmation Dialog */}
+      <Dialog open={showRevokeConfirm} onOpenChange={setShowRevokeConfirm}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-red-700">Revoke Device API Key</DialogTitle>
+            <DialogDescription>
+              This will immediately invalidate the current API key. The device will no longer be able to connect or send data until a new key is generated.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setShowRevokeConfirm(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleRevokeKey}
+              disabled={keyActionLoading}
+            >
+              {keyActionLoading ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4 mr-2" />
+              )}
+              Revoke Key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

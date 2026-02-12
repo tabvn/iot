@@ -1,8 +1,13 @@
-import type { Env } from "@/storage";
-import type { LoginRequestBody, LoginResponseBody, SessionEntity, UserEntity, TableEntity } from "@/models";
-import { queryByPk, putEntity, deleteEntity } from "@/storage";
-import { getAuthFromRequest } from "@/auth";
-import { Router, type RouterType } from "itty-router";
+import { createRepositories } from '@/db';
+import type { StorageEnv } from '@/db/storage';
+import type { UserEntity } from '@/db/types';
+import { getAuthFromRequest } from '@/auth';
+import type { RouterType } from 'itty-router';
+import {
+  successResponse,
+  badRequestResponse,
+  unauthorizedResponse,
+} from '@/api-responses';
 
 // Simple password hash verification using Web Crypto
 async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
@@ -11,31 +16,35 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
   return password === storedHash;
 }
 
-async function signUserJwt(env: Env, user: UserEntity): Promise<string | null> {
-  const secret = (env as any).USER_JWT_SECRET as string | undefined;
+interface JwtEnv extends StorageEnv {
+  USER_JWT_SECRET?: string;
+}
+
+async function signUserJwt(env: JwtEnv, user: UserEntity): Promise<string | null> {
+  const secret = env.USER_JWT_SECRET;
   if (!secret) return null;
 
-  const header = { alg: "HS256", typ: "JWT" };
+  const header = { alg: 'HS256', typ: 'JWT' };
   const nowSeconds = Math.floor(Date.now() / 1000);
   const payload = {
     sub: user.userId,
-    type: "user",
+    type: 'user',
     iat: nowSeconds,
     exp: nowSeconds + 24 * 60 * 60, // 24h
   };
 
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
-    "raw",
+    'raw',
     encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
+    { name: 'HMAC', hash: 'SHA-256' },
     false,
-    ["sign"]
+    ['sign']
   );
 
   function base64UrlEncode(data: Uint8Array): string {
     const b64 = btoa(String.fromCharCode(...data));
-    return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
   }
 
   const headerJson = JSON.stringify(header);
@@ -43,124 +52,72 @@ async function signUserJwt(env: Env, user: UserEntity): Promise<string | null> {
   const headerB64 = base64UrlEncode(encoder.encode(headerJson));
   const payloadB64 = base64UrlEncode(encoder.encode(payloadJson));
   const data = encoder.encode(`${headerB64}.${payloadB64}`);
-  const signature = await crypto.subtle.sign("HMAC", key, data);
+  const signature = await crypto.subtle.sign('HMAC', key, data);
   const signatureB64 = base64UrlEncode(new Uint8Array(signature));
 
   return `${headerB64}.${payloadB64}.${signatureB64}`;
 }
 
 export function loginRouter(router: RouterType) {
-  router.post("/login", async (request: Request, env: Env) => {
-    const body = (await request.json().catch(() => null)) as LoginRequestBody | null;
-    if (!body || !body.email || !body.password) {
-      return new Response(JSON.stringify({ error: "email and password are required" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+  router.post('/login', async (request: Request, env: JwtEnv) => {
+    const body = (await request.json().catch(() => null)) as {
+      email?: string;
+      password?: string;
+    } | null;
+
+    if (!body?.email || !body?.password) {
+      return badRequestResponse('email and password are required');
     }
+
     if (body.password.length < 8) {
-      // Keep error generic to avoid leaking password policy from this endpoint
-      return new Response(JSON.stringify({ error: "Invalid credentials" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return unauthorizedResponse('Invalid credentials');
     }
+
     const email = body.email.toLowerCase();
     const password = body.password;
 
-    // Lookup user by email using USER_EMAIL secondary index
-    const items = await queryByPk<any>(env, `USER_EMAIL#${email}`);
-    const record = items[0] as { userId?: string } | undefined;
-    if (!record?.userId) {
-      return new Response(JSON.stringify({ error: "Invalid credentials" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+    const db = createRepositories(env);
 
-    // Load full user entity
-    const userPk = `USER#${record.userId}`;
-    const userSk = `PROFILE#${record.userId}`;
-    const user = await (async () => {
-      const entity = await (await import("@/storage")).getEntity<UserEntity>(env, userPk, userSk);
-      return entity ?? null;
-    })();
-
+    // Get user by email
+    const user = await db.users.getByEmail(email);
     if (!user) {
-      return new Response(JSON.stringify({ error: "Invalid credentials" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return unauthorizedResponse('Invalid credentials');
     }
 
-    // Verify password (for now, direct compare; replace with real hash check)
-    const ok = await verifyPassword(password, user.passwordHash ?? "");
+    // Verify password
+    const ok = await verifyPassword(password, user.passwordHash ?? '');
     if (!ok) {
-      return new Response(JSON.stringify({ error: "Invalid credentials" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return unauthorizedResponse('Invalid credentials');
     }
 
-    // Create a session row (optional, useful for tracking login sessions)
-    const sessionId = crypto.randomUUID();
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    // Create session
+    const session = await db.sessions.create(user.userId, 24); // 24 hours
 
-    const session: SessionEntity = {
-      pk: `USER#${user.userId}`,
-      sk: `SESSION#${sessionId}`,
-      entityType: "SESSION",
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-      sessionId,
-      userId: user.userId,
-      expiresAt,
-    };
-
-    await putEntity(env, session as TableEntity);
-
-    // Issue a JWT compatible with the auth model, if USER_JWT_SECRET is configured
+    // Issue JWT
     const token = await signUserJwt(env, user);
 
-    const responseBody: LoginResponseBody & { token?: string } = {
-      sessionId,
+    return successResponse({
+      sessionId: session.sessionId,
       userId: user.userId,
       ...(token ? { token } : {}),
-    };
-
-    return new Response(JSON.stringify(responseBody), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
     });
   });
 
-  router.post("/logout", async (request: Request, env: Env) => {
-    const auth = await getAuthFromRequest(env as any, request);
-    if (!auth || auth.type !== "user" || !auth.userId) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+  router.post('/logout', async (request: Request, env: JwtEnv) => {
+    const auth = await getAuthFromRequest(env, request);
+    if (!auth || auth.type !== 'user' || !auth.userId) {
+      return unauthorizedResponse();
     }
 
     const body = (await request.json().catch(() => null)) as { sessionId?: string } | null;
-    const pk = `USER#${auth.userId}`;
+    const db = createRepositories(env);
 
     if (body?.sessionId) {
-      await deleteEntity(env, pk, `SESSION#${body.sessionId}`);
+      await db.sessions.delete(auth.userId, body.sessionId);
     } else {
-      const items = await queryByPk<SessionEntity>(env, pk);
-      await Promise.all(
-        items
-          .filter((e) => typeof e.sk === "string" && e.sk.startsWith("SESSION#"))
-          .map((s) => deleteEntity(env, pk, s.sk!))
-      );
+      await db.sessions.deleteAllForUser(auth.userId);
     }
 
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return successResponse({ ok: true });
   });
 }

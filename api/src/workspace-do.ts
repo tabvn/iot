@@ -1,27 +1,33 @@
-import type { DurableObjectState } from "@cloudflare/workers-types";
-import type { Env as StorageEnv } from "@/storage";
-import type { TableEntity, WorkspaceEntity, WorkspaceMemberEntity } from "@/models";
-import { putEntity, queryByPk, getEntity } from "@/storage";
-
-interface Env extends StorageEnv {}
+import type { DurableObjectState } from '@cloudflare/workers-types';
+import type { StorageEnv } from '@/db/storage';
+import { put, get, queryByPk } from '@/db/storage';
+import type { WorkspaceEntity, WorkspaceMemberEntity } from '@/db/types';
+import { Keys, EntityTypes } from '@/db/types';
+import {
+  successResponse,
+  createdResponse,
+  notFoundResponse,
+  badRequestResponse,
+  conflictResponse,
+} from '@/api-responses';
 
 export class WorkspaceDurableObject {
   private state: DurableObjectState;
-  private env: Env;
+  private env: StorageEnv;
   private sockets: Set<WebSocket>;
 
-  constructor(state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: StorageEnv) {
     this.state = state;
     this.env = env;
     this.sockets = new Set();
   }
 
   private async handleWebSocket(request: Request): Promise<Response> {
-    const upgradeHeader = request.headers.get("Upgrade");
-    if (!upgradeHeader || upgradeHeader.toLowerCase() !== "websocket") {
-      return new Response("Expected WebSocket", {
+    const upgradeHeader = request.headers.get('Upgrade');
+    if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+      return new Response('Expected WebSocket', {
         status: 426,
-        headers: { "Content-Type": "text/plain" },
+        headers: { 'Content-Type': 'text/plain' },
       });
     }
 
@@ -40,28 +46,25 @@ export class WorkspaceDurableObject {
     ws.accept();
     this.sockets.add(ws);
 
-    ws.addEventListener("message", (event) => {
-      // Optionally handle messages from clients in the future
-      // For now, we ignore or echo minimal keep-alive
-      if (typeof event.data === "string" && event.data === "ping") {
+    ws.addEventListener('message', (event) => {
+      if (typeof event.data === 'string' && event.data === 'ping') {
         try {
-          ws.send("pong");
+          ws.send('pong');
         } catch {
-          // ignore send errors
+          // ignore
         }
       }
     });
 
-    ws.addEventListener("close", () => {
+    ws.addEventListener('close', () => {
       this.sockets.delete(ws);
     });
 
-    ws.addEventListener("error", () => {
+    ws.addEventListener('error', () => {
       this.sockets.delete(ws);
     });
   }
 
-  // Broadcast helper for future workspace-level events
   private broadcast(message: unknown) {
     const data = JSON.stringify(message);
     for (const ws of this.sockets) {
@@ -76,83 +79,73 @@ export class WorkspaceDurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/ws") {
+    if (url.pathname === '/ws') {
       return this.handleWebSocket(request);
     }
 
-    if (request.method === "POST" && url.pathname === "/event") {
+    if (request.method === 'POST' && url.pathname === '/event') {
       const body = await request.json().catch(() => null);
-      if (!body || typeof body !== "object") {
-        return new Response(JSON.stringify({ error: "invalid event" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
+      if (!body || typeof body !== 'object') {
+        return badRequestResponse('invalid event');
       }
       this.broadcast(body);
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return successResponse({ ok: true });
     }
 
-    if (request.method === "POST" && url.pathname === "/create") {
+    if (request.method === 'POST' && url.pathname === '/create') {
       const body = (await request.json().catch(() => null)) as {
         ownerUserId?: string;
         name?: string;
-        slug?: string; // alias
+        slug?: string;
         description?: string;
       } | null;
 
       if (!body?.ownerUserId || !body.name || !body.slug) {
-        return new Response(JSON.stringify({ error: "ownerUserId, name, slug are required" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
+        return badRequestResponse('ownerUserId, name, slug are required');
       }
 
       const slugLower = body.slug.toLowerCase();
 
       // Ensure slug uniqueness via alias index
-      const existingIndex = await queryByPk(this.env, `WS_ALIAS#${slugLower}`);
-      if (existingIndex.length > 0) {
-        return new Response(JSON.stringify({ error: "Workspace alias already exists" }), {
-          status: 409,
-          headers: { "Content-Type": "application/json" },
-        });
+      const { pk: aliasPk, sk: aliasSk } = Keys.workspaceAlias(slugLower);
+      const existingAlias = await get(this.env, aliasPk, aliasSk);
+      if (existingAlias && !('deletedAt' in existingAlias)) {
+        return conflictResponse('Workspace alias already exists');
       }
 
       const workspaceId = crypto.randomUUID();
       const now = new Date().toISOString();
 
+      // Main workspace entity
       const workspace: WorkspaceEntity = {
-        pk: `WS#${workspaceId}`,
-        sk: "METADATA",
-        entityType: "WORKSPACE",
+        ...Keys.workspace(workspaceId),
+        entityType: EntityTypes.WORKSPACE,
         createdAt: now,
         updatedAt: now,
         workspaceId,
         ownerUserId: body.ownerUserId,
         name: body.name,
-        slug: body.slug,
+        slug: slugLower,
         description: body.description,
       };
 
-      const ownerMembership = {
-        pk: `USER#${body.ownerUserId}`,
-        sk: `WS#${workspaceId}`,
-        entityType: "WORKSPACE" as const,
+      // User-to-workspace index (for listing user's workspaces)
+      const userWorkspaceIndex: WorkspaceMemberEntity = {
+        ...Keys.userWorkspace(body.ownerUserId, workspaceId),
+        entityType: EntityTypes.WORKSPACE,
         createdAt: now,
         updatedAt: now,
         workspaceId,
         userId: body.ownerUserId,
-        role: "owner" as const,
+        role: 'owner',
         devicePermissions: {},
-      } satisfies WorkspaceMemberEntity;
+      };
 
-      const aliasEntity = {
-        pk: `WS_ALIAS#${slugLower}`,
-        sk: `WS#${workspaceId}`,
-        entityType: "WORKSPACE" as const,
+      // Alias index
+      const aliasEntity: WorkspaceEntity = {
+        pk: aliasPk,
+        sk: aliasSk,
+        entityType: EntityTypes.WORKSPACE,
         createdAt: now,
         updatedAt: now,
         workspaceId,
@@ -160,49 +153,38 @@ export class WorkspaceDurableObject {
         name: body.name,
         slug: slugLower,
         description: body.description,
-      } satisfies WorkspaceEntity;
+      };
 
-      const globalIndex = {
-        pk: "WORKSPACES#ALL",
-        sk: `WS#${workspaceId}`,
-        entityType: "WORKSPACE" as const,
-        createdAt: now,
-        updatedAt: now,
-        workspaceId,
-        ownerUserId: body.ownerUserId,
-        name: body.name,
-        slug: slugLower,
-        description: body.description,
-      } satisfies WorkspaceEntity;
-
-      // Workspace-scoped member record so resolveWorkspace can verify membership
-      const workspaceMember = {
-        pk: `WS#${workspaceId}`,
-        sk: `MEMBER#${body.ownerUserId}`,
-        entityType: "WORKSPACE" as const,
+      // Workspace-scoped member record (for membership verification)
+      const workspaceMember: WorkspaceMemberEntity = {
+        ...Keys.workspaceMember(workspaceId, body.ownerUserId),
+        entityType: EntityTypes.WORKSPACE,
         createdAt: now,
         updatedAt: now,
         workspaceId,
         userId: body.ownerUserId,
-        role: "owner" as const,
+        role: 'owner',
         devicePermissions: {},
-      } satisfies WorkspaceMemberEntity;
+      };
 
       await Promise.all([
-        putEntity(this.env, workspace),
-        putEntity(this.env, ownerMembership),
-        putEntity(this.env, workspaceMember),
-        putEntity(this.env, aliasEntity),
-        putEntity(this.env, globalIndex),
+        put(this.env, workspace),
+        put(this.env, userWorkspaceIndex),
+        put(this.env, aliasEntity),
+        put(this.env, workspaceMember),
       ]);
 
-      return new Response(JSON.stringify({ workspaceId, name: workspace.name, slug: workspace.slug, description: workspace.description, createdAt: workspace.createdAt }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" },
+      return createdResponse({
+        workspaceId,
+        name: workspace.name,
+        slug: workspace.slug,
+        description: workspace.description,
+        ownerUserId: workspace.ownerUserId,
+        createdAt: workspace.createdAt,
       });
     }
 
-    if (request.method === "PUT" && url.pathname === "/update") {
+    if (request.method === 'PUT' && url.pathname === '/update') {
       const body = (await request.json().catch(() => null)) as {
         ownerUserId?: string;
         workspaceId?: string;
@@ -212,30 +194,28 @@ export class WorkspaceDurableObject {
       } | null;
 
       if (!body?.ownerUserId || !body.workspaceId) {
-        return new Response(JSON.stringify({ error: "ownerUserId and workspaceId are required" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
+        return badRequestResponse('ownerUserId and workspaceId are required');
       }
 
-      const { ownerUserId, workspaceId } = body;
-      const existing = await getEntity<WorkspaceEntity>(
-        this.env,
-        `WS#${workspaceId}`,
-        "METADATA"
-      );
+      const { pk, sk } = Keys.workspace(body.workspaceId);
+      const existing = await get<WorkspaceEntity>(this.env, pk, sk);
       if (!existing) {
-        return new Response(JSON.stringify({ error: "Workspace not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
+        return notFoundResponse('Workspace not found');
       }
 
       const now = new Date().toISOString();
       const newName = body.name ?? existing.name;
-      const newSlug = body.slug ?? existing.slug;
-      const newSlugLower = newSlug.toLowerCase();
-      const oldSlugLower = existing.slug.toLowerCase();
+      const newSlug = (body.slug ?? existing.slug).toLowerCase();
+      const oldSlug = existing.slug.toLowerCase();
+
+      // Check if slug is changing and if new slug is available
+      if (oldSlug !== newSlug) {
+        const { pk: aliasPk, sk: aliasSk } = Keys.workspaceAlias(newSlug);
+        const existingAlias = await get(this.env, aliasPk, aliasSk);
+        if (existingAlias && !('deletedAt' in existingAlias)) {
+          return conflictResponse('Workspace alias already exists');
+        }
+      }
 
       const updated: WorkspaceEntity = {
         ...existing,
@@ -245,132 +225,92 @@ export class WorkspaceDurableObject {
         updatedAt: now,
       };
 
-      const writes: Promise<unknown>[] = [putEntity(this.env, updated)];
+      const writes: Promise<void>[] = [put(this.env, updated)];
 
-      if (oldSlugLower !== newSlugLower) {
-        // Ensure new alias is not already used
-        const aliasIndex = await queryByPk(this.env, `WS_ALIAS#${newSlugLower}`);
-        if (aliasIndex.length > 0) {
-          return new Response(JSON.stringify({ error: "Workspace alias already exists" }), {
-            status: 409,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        const aliasEntity = {
-          pk: `WS_ALIAS#${newSlugLower}`,
-          sk: `WS#${workspaceId}`,
-          entityType: "WORKSPACE" as const,
+      // Update alias index if slug changed
+      if (oldSlug !== newSlug) {
+        const { pk: aliasPk, sk: aliasSk } = Keys.workspaceAlias(newSlug);
+        const aliasEntity: WorkspaceEntity = {
+          pk: aliasPk,
+          sk: aliasSk,
+          entityType: EntityTypes.WORKSPACE,
           createdAt: existing.createdAt,
           updatedAt: now,
-          workspaceId,
+          workspaceId: body.workspaceId,
           ownerUserId: existing.ownerUserId,
           name: newName,
-          slug: newSlugLower,
-        } satisfies WorkspaceEntity;
-        writes.push(putEntity(this.env, aliasEntity));
+          slug: newSlug,
+        };
+        writes.push(put(this.env, aliasEntity));
       }
-
-      // Also update owner membership record name/slug for convenience
-      const ownerMembershipUpdated = {
-        pk: `USER#${ownerUserId}`,
-        sk: `WS#${workspaceId}`,
-        entityType: "WORKSPACE" as const,
-        createdAt: existing.createdAt,
-        updatedAt: now,
-        workspaceId,
-        userId: ownerUserId,
-        role: "owner" as const,
-        devicePermissions: {},
-      } satisfies WorkspaceMemberEntity;
-      writes.push(putEntity(this.env, ownerMembershipUpdated));
 
       await Promise.all(writes);
 
-      return new Response(JSON.stringify({ workspaceId, name: updated.name, slug: updated.slug, description: updated.description }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
+      return successResponse({
+        workspaceId: body.workspaceId,
+        name: updated.name,
+        slug: updated.slug,
+        description: updated.description,
       });
     }
 
-    if (request.method === "DELETE" && url.pathname === "/delete") {
+    if (request.method === 'DELETE' && url.pathname === '/delete') {
       const body = (await request.json().catch(() => null)) as {
         ownerUserId?: string;
         workspaceId?: string;
       } | null;
 
       if (!body?.ownerUserId || !body.workspaceId) {
-        return new Response(JSON.stringify({ error: "ownerUserId and workspaceId are required" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
+        return badRequestResponse('ownerUserId and workspaceId are required');
       }
 
-      const existing = await getEntity<WorkspaceEntity>(
-        this.env,
-        `WS#${body.workspaceId}`,
-        "METADATA"
-      );
+      const { pk, sk } = Keys.workspace(body.workspaceId);
+      const existing = await get<WorkspaceEntity>(this.env, pk, sk);
       if (!existing) {
-        return new Response(JSON.stringify({ error: "Workspace not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
+        return notFoundResponse('Workspace not found');
       }
 
       const now = new Date().toISOString();
       const slugLower = existing.slug.toLowerCase();
 
       // Soft-delete: mark entities with deletedAt
-      const deleted = { ...existing, updatedAt: now, deletedAt: now };
-
-      const aliasEntity = {
+      const deleted: WorkspaceEntity & { deletedAt: string } = {
         ...existing,
-        pk: `WS_ALIAS#${slugLower}`,
-        sk: `WS#${existing.workspaceId}`,
+        updatedAt: now,
+        deletedAt: now,
+      };
+
+      const { pk: aliasPk, sk: aliasSk } = Keys.workspaceAlias(slugLower);
+      const aliasDeleted = {
+        ...existing,
+        pk: aliasPk,
+        sk: aliasSk,
         slug: slugLower,
         updatedAt: now,
         deletedAt: now,
       };
 
-      const globalIndexDeleted = {
-        ...existing,
-        pk: "WORKSPACES#ALL",
-        sk: `WS#${existing.workspaceId}`,
-        slug: slugLower,
-        updatedAt: now,
-        deletedAt: now,
-      };
-
-      const ownerMembershipDeleted = {
-        pk: `USER#${body.ownerUserId}`,
-        sk: `WS#${existing.workspaceId}`,
-        entityType: "WORKSPACE" as const,
+      const userWorkspaceDeleted: WorkspaceMemberEntity & { deletedAt: string } = {
+        ...Keys.userWorkspace(body.ownerUserId, body.workspaceId),
+        entityType: EntityTypes.WORKSPACE,
         createdAt: existing.createdAt,
         updatedAt: now,
         workspaceId: existing.workspaceId,
         userId: body.ownerUserId,
-        role: "owner" as const,
+        role: 'owner',
         devicePermissions: {},
         deletedAt: now,
       };
 
       await Promise.all([
-        putEntity(this.env, deleted as TableEntity),
-        putEntity(this.env, ownerMembershipDeleted as TableEntity),
-        putEntity(this.env, aliasEntity as TableEntity),
-        putEntity(this.env, globalIndexDeleted as TableEntity),
+        put(this.env, deleted),
+        put(this.env, aliasDeleted),
+        put(this.env, userWorkspaceDeleted as any),
       ]);
 
-      return new Response(JSON.stringify({ ok: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return successResponse({ ok: true });
     }
 
-    return new Response(JSON.stringify({ error: "Not found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
+    return notFoundResponse();
   }
 }

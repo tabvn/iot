@@ -18,7 +18,6 @@ export async function getSession(): Promise<Session | null> {
   if (!auth) return null;
   try {
     const me = await apiGetMe(auth.token);
-    console.log("DEBUG",me);
     return {
       user: { id: me.userId, name: me?.name || "" , email: me.email, avatarUrl: me.avatarUrl },
       token: auth.token,

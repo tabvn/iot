@@ -1,6 +1,6 @@
 import { Router, type RouterType, createCors } from "itty-router";
-import type { Env as StorageEnv } from "@/storage";
-import { queryByPk } from "@/storage";
+import type { StorageEnv } from "@/db/storage";
+import { queryByPk } from "@/db/storage";
 import { usersRouter } from "@/routes/users";
 import { workspacesRouter } from "@/routes/workspaces";
 import { devicesRouter } from "@/routes/devices";
@@ -10,6 +10,12 @@ import { analyticsRouter } from "@/routes/analytics";
 import { membersPlanBillingRouter } from "@/routes/members-plan-billing";
 import { automationsRouter } from "@/routes/automations";
 import { workspaceApiKeysRouter } from "@/routes/workspace-api-keys";
+import { deviceApiKeysRouter } from "@/routes/device-api-keys";
+import { superMasterKeysRouter } from "@/routes/super-master-keys";
+import { invitationsRouter } from "@/routes/invitations";
+import { automationLogsRouter } from "@/routes/automation-logs";
+import { automationStatsRouter } from "@/routes/automation-stats";
+import { notificationsRouter } from "@/routes/notifications";
 import { getAuthFromRequest } from "@/auth";
 import { openApiDoc } from "@/openapi";
 import { validateApiExplorerBody } from "@/schemas";
@@ -30,10 +36,11 @@ export interface Env extends StorageEnv {
   WORKSPACE_DO: DurableObjectNamespace;
   WORKSPACE_AUTOMATION_DO: DurableObjectNamespace;
   WORKSPACE_CLEANUP_DO: DurableObjectNamespace;
-  USER_JWT_SECRET?: string;
-  API_JWT_SECRET?: string;
-  DEVICE_JWT_SECRET?: string;
-  WORKSPACE_MASTER_JWT_SECRET?: string;
+  USER_JWT_SECRET?: string; // Only used for user JWT auth
+  // Email configuration
+  EMAIL_FROM?: string; // e.g., "noreply@thebaycity.dev"
+  EMAIL_FROM_NAME?: string; // e.g., "Thebaycity IoT"
+  APP_URL?: string; // e.g., "https://thebaycity.dev" for building invite links
 }
 
 // Shared JSON response helpers
@@ -217,14 +224,20 @@ loginRouter(router);
 ingestRouter(router);
 analyticsRouter(router);
 membersPlanBillingRouter(router);
+automationLogsRouter(router);
+automationStatsRouter(router);
 automationsRouter(router);
+notificationsRouter(router);
 workspaceApiKeysRouter(router);
+deviceApiKeysRouter(router);
+superMasterKeysRouter(router);
+invitationsRouter(router);
 
 async function listAllWorkspaceIds(env: Env): Promise<string[]> {
-  const rows = await queryByPk(env, "WORKSPACES#ALL");
-  return rows
-    .filter((r) => !("deletedAt" in r))
-    .map((r) => (r as { workspaceId: string }).workspaceId);
+  const result = await queryByPk(env, "WORKSPACES#ALL");
+  return result.items
+    .filter((r: any) => !("deletedAt" in r))
+    .map((r: any) => (r as { workspaceId: string }).workspaceId);
 }
 
 export default {

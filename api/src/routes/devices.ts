@@ -1,140 +1,131 @@
-import type { Env } from "@/storage";
-import type { TableEntity, DeviceEntity } from "@/models";
-import { putEntity, queryByPk, getEntity } from "@/storage";
-import { resolveWorkspace, type AuthEnv, hasManageAccess } from "@/auth";
-import { validateCreateDeviceBody } from "@/schemas";
-import { Router, type RouterType } from "itty-router";
+import { createRepositories } from '@/db';
+import type { StorageEnv } from '@/db/storage';
+import { resolveWorkspace, type AuthEnv, requireRole } from '@/auth';
+import { validateCreateDeviceBody } from '@/schemas';
+import type { RouterType } from 'itty-router';
+import {
+  successResponse,
+  createdResponse,
+  notFoundResponse,
+  unauthorizedResponse,
+  forbiddenResponse,
+  badRequestResponse,
+  toApiDevice,
+} from '@/api-responses';
+import { notifyWorkspaceActivity } from '@/notifications';
 
 export function devicesRouter(router: RouterType) {
-  // Create device within workspace - requires manage access (user or workspace master)
-  router.post("/devices", async (request: Request, env: AuthEnv) => {
+  // Create device within workspace - requires manage access
+  router.post('/devices', async (request: Request, env: AuthEnv & StorageEnv) => {
     const resolved = await resolveWorkspace(env, request);
-    if (!resolved || !hasManageAccess(resolved.auth)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!requireRole(resolved, 'editor')) {
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
 
     const parsed = await request.json().catch(() => null);
     const validation = validateCreateDeviceBody(parsed);
     if (!validation.ok) {
-      return new Response(JSON.stringify({ error: validation.error }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return badRequestResponse(validation.error);
     }
     const body = validation.value;
 
-    const deviceId = crypto.randomUUID();
-    const now = new Date().toISOString();
-
-    const entity: DeviceEntity = {
-      pk: `WS#${workspaceId}`,
-      sk: `DEV#${deviceId}`,
-      entityType: "DEVICE",
-      createdAt: now,
-      updatedAt: now,
-      deviceId,
+    const db = createRepositories(env);
+    const device = await db.devices.create({
       workspaceId,
       name: body.name,
       type: body.type,
-      status: "offline",
-      ...(body.description && { description: body.description }),
-      ...(body.manufacturer && { manufacturer: body.manufacturer }),
-      ...(body.model && { model: body.model }),
-      ...(body.firmwareVersion && { firmwareVersion: body.firmwareVersion }),
-      ...(body.location && { location: body.location }),
-      ...(body.tags && { tags: body.tags }),
-      ...(body.metadata && { metadata: body.metadata }),
-      ...(body.fieldMappings && { fieldMappings: body.fieldMappings }),
-    };
-
-    await putEntity(env as Env, entity as TableEntity);
-
-    return new Response(JSON.stringify({ deviceId, name: entity.name, type: entity.type }), {
-      status: 201,
-      headers: { "Content-Type": "application/json" },
+      description: body.description,
+      manufacturer: body.manufacturer,
+      model: body.model,
+      firmwareVersion: body.firmwareVersion,
+      location: body.location,
+      tags: body.tags,
+      metadata: body.metadata,
+      fieldMappings: body.fieldMappings,
     });
+
+    notifyWorkspaceActivity(env, workspaceId, `Device "${body.name}" created`, `A new ${body.type} device has been added to the workspace.`, { deviceId: device.deviceId, deviceName: body.name }).catch(() => {});
+
+    return createdResponse(toApiDevice(device));
   });
 
-  // List devices in workspace - requires manage access
-  router.get("/devices", async (request: Request, env: AuthEnv) => {
+  // List devices in workspace
+  router.get('/devices', async (request: Request, env: AuthEnv & StorageEnv) => {
     const resolved = await resolveWorkspace(env, request);
-    if (!resolved || !hasManageAccess(resolved.auth)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!resolved) {
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
+    const db = createRepositories(env);
+    const result = await db.devices.getAllByWorkspace(workspaceId);
 
-    const items = await queryByPk<DeviceEntity>(env as Env, `WS#${workspaceId}`);
-    const devices = items
-      .filter((e: DeviceEntity) => e.entityType === "DEVICE")
-      .map((e: DeviceEntity) => ({
-        deviceId: e.deviceId,
-        name: e.name,
-        type: e.type,
-        createdAt: e.createdAt,
-        status: e.status,
-        lastSeenAt: e.lastSeenAt,
-      }));
-
-    return new Response(JSON.stringify({ devices }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+    return successResponse({
+      devices: result.items.map(toApiDevice),
     });
   });
 
   // Update device
-  router.put("/devices/:deviceId", async (request: any, env: AuthEnv) => {
+  router.put('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
-    if (!resolved || !hasManageAccess(resolved.auth)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!requireRole(resolved, 'editor')) {
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
     const { deviceId } = request.params;
 
-    const entity = await getEntity<DeviceEntity>(env as Env, `WS#${workspaceId}`, `DEV#${deviceId}`);
-    if (!entity) {
-      return new Response(JSON.stringify({ error: "Device not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+    const db = createRepositories(env);
+    const existing = await db.devices.getById(workspaceId, deviceId);
+
+    if (!existing) {
+      return notFoundResponse('Device not found');
     }
 
     const body = await (request as Request).json().catch(() => null);
-    if (!body || typeof body !== "object") {
-      return new Response(JSON.stringify({ error: "Body must be an object" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!body || typeof body !== 'object') {
+      return badRequestResponse('Body must be an object');
     }
 
     const updates = body as Record<string, unknown>;
-    const now = new Date().toISOString();
+    const updatePayload: Record<string, any> = {};
 
-    const updated = { ...entity, updatedAt: now };
-    if (typeof updates.name === "string" && updates.name.trim()) updated.name = updates.name.trim();
-    if (typeof updates.type === "string" && updates.type.trim()) updated.type = updates.type.trim();
-    if (typeof updates.description === "string") updated.description = updates.description.trim();
-    if (typeof updates.manufacturer === "string") updated.manufacturer = updates.manufacturer.trim();
-    if (typeof updates.model === "string") updated.model = updates.model.trim();
-    if (typeof updates.firmwareVersion === "string") updated.firmwareVersion = updates.firmwareVersion.trim();
-    if (typeof updates.location === "string") updated.location = updates.location.trim();
-    if (Array.isArray(updates.tags)) updated.tags = updates.tags.filter((t): t is string => typeof t === "string");
-    if (updates.metadata && typeof updates.metadata === "object" && !Array.isArray(updates.metadata)) {
-      updated.metadata = updates.metadata as Record<string, unknown>;
+    if (typeof updates.name === 'string' && updates.name.trim()) {
+      updatePayload.name = updates.name.trim();
+    }
+    if (typeof updates.type === 'string' && updates.type.trim()) {
+      updatePayload.type = updates.type.trim();
+    }
+    if (typeof updates.description === 'string') {
+      updatePayload.description = updates.description.trim();
+    }
+    if (typeof updates.manufacturer === 'string') {
+      updatePayload.manufacturer = updates.manufacturer.trim();
+    }
+    if (typeof updates.model === 'string') {
+      updatePayload.model = updates.model.trim();
+    }
+    if (typeof updates.firmwareVersion === 'string') {
+      updatePayload.firmwareVersion = updates.firmwareVersion.trim();
+    }
+    if (typeof updates.location === 'string') {
+      updatePayload.location = updates.location.trim();
+    }
+    if (Array.isArray(updates.tags)) {
+      updatePayload.tags = updates.tags.filter((t): t is string => typeof t === 'string');
+    }
+    if (updates.metadata && typeof updates.metadata === 'object' && !Array.isArray(updates.metadata)) {
+      updatePayload.metadata = updates.metadata as Record<string, unknown>;
     }
     if (Array.isArray(updates.fieldMappings)) {
-      const validTypes = new Set(["number", "string", "boolean", "json"]);
-      updated.fieldMappings = updates.fieldMappings
-        .filter((fm: any) => fm && typeof fm.sourceField === "string" && typeof fm.displayLabel === "string" && validTypes.has(fm.dataType))
+      const validTypes = new Set(['number', 'string', 'boolean', 'json']);
+      updatePayload.fieldMappings = updates.fieldMappings
+        .filter(
+          (fm: any) =>
+            fm &&
+            typeof fm.sourceField === 'string' &&
+            typeof fm.displayLabel === 'string' &&
+            validTypes.has(fm.dataType)
+        )
         .map((fm: any) => ({
           sourceField: fm.sourceField,
           displayLabel: fm.displayLabel,
@@ -148,45 +139,59 @@ export function devicesRouter(router: RouterType) {
         }));
     }
 
-    await putEntity(env as Env, updated as TableEntity);
+    const updated = await db.devices.update(workspaceId, deviceId, updatePayload);
 
-    return new Response(JSON.stringify(updated), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    if (!updated) {
+      return notFoundResponse('Device not found');
+    }
+
+    return successResponse(toApiDevice(updated));
   });
 
-  // Get a single device - device tokens can read themselves; user/workspace_master can read any device in workspace
-  router.get("/devices/:deviceId", async (request: any, env: AuthEnv) => {
+  // Get a single device
+  router.get('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!resolved) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return unauthorizedResponse();
     }
     const { workspaceId, auth } = resolved;
     const { deviceId } = request.params;
 
-    const entity = await getEntity<DeviceEntity>(env as Env, `WS#${workspaceId}`, `DEV#${deviceId}`);
-    if (!entity) {
-      return new Response(JSON.stringify({ error: "Device not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+    const db = createRepositories(env);
+    const device = await db.devices.getById(workspaceId, deviceId);
+
+    if (!device) {
+      return notFoundResponse('Device not found');
     }
 
     // Device token can only access its own record
-    if (auth.type === "device" && auth.deviceId && auth.deviceId !== entity.deviceId) {
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (auth.type === 'device' && auth.deviceId && auth.deviceId !== device.deviceId) {
+      return forbiddenResponse();
     }
 
-    return new Response(JSON.stringify(entity), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return successResponse(toApiDevice(device));
+  });
+
+  // Delete device
+  router.delete('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv) => {
+    const resolved = await resolveWorkspace(env, request as Request);
+    if (!requireRole(resolved, 'admin')) {
+      return unauthorizedResponse();
+    }
+    const { workspaceId } = resolved;
+    const { deviceId } = request.params;
+
+    const db = createRepositories(env);
+    const existing = await db.devices.getById(workspaceId, deviceId);
+
+    if (!existing) {
+      return notFoundResponse('Device not found');
+    }
+
+    await db.devices.delete(workspaceId, deviceId);
+
+    notifyWorkspaceActivity(env, workspaceId, `Device "${existing.name}" deleted`, `Device ${existing.name} has been removed from the workspace.`, { deviceId, deviceName: existing.name }).catch(() => {});
+
+    return successResponse({ ok: true });
   });
 }

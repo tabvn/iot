@@ -1,183 +1,171 @@
-import type { Env as StorageEnv } from "@/storage";
-import type { Env as WorkerEnv } from "../worker";
-import type { AutomationEntity, TableEntity, AutomationTriggerConfig, AutomationActionConfig } from "@/models";
-import { putEntity, getEntity, queryByPk, deleteEntity } from "@/storage";
-import { resolveWorkspace, hasManageAccess, type AuthEnv } from "@/auth";
-import { validateCreateAutomationBody } from "@/schemas";
-import { Router, type RouterType } from "itty-router";
+import { createRepositories } from '@/db';
+import type { StorageEnv } from '@/db/storage';
+import type { AutomationTriggerConfig, AutomationActionConfig, AutomationConditionGroup, AutomationStatus } from '@/db/types';
+import { resolveWorkspace, requireRole, type AuthEnv } from '@/auth';
+import { validateCreateAutomationBody } from '@/schemas';
+import type { RouterType } from 'itty-router';
+import {
+  successResponse,
+  createdResponse,
+  notFoundResponse,
+  unauthorizedResponse,
+  badRequestResponse,
+  toApiAutomation,
+} from '@/api-responses';
+import { notifyWorkspaceActivity } from '@/notifications';
 
-type Env = StorageEnv & Pick<WorkerEnv, "WORKSPACE_AUTOMATION_DO">;
+interface AutomationEnv extends StorageEnv {
+  WORKSPACE_AUTOMATION_DO: DurableObjectNamespace;
+}
 
-async function invalidateAutomationCache(env: Env, workspaceId: string) {
+async function invalidateAutomationCache(env: AutomationEnv, workspaceId: string) {
   const id = env.WORKSPACE_AUTOMATION_DO.idFromName(workspaceId);
   const stub = env.WORKSPACE_AUTOMATION_DO.get(id);
-  await stub.fetch("https://automation/invalidate", { method: "POST" }).catch((err) => {
-    console.error("[automations][invalidate][error]", err);
+  await stub.fetch('https://automation/invalidate', { method: 'POST' }).catch((err) => {
+    console.error('[automations][invalidate][error]', err);
   });
 }
 
 interface UpdateAutomationBody {
   name?: string;
   description?: string;
-  status?: AutomationEntity["status"];
-  triggerType?: AutomationEntity["triggerType"];
+  status?: AutomationStatus;
+  triggerType?: string;
   triggerConfig?: AutomationTriggerConfig;
+  conditionGroups?: AutomationConditionGroup[];
+  conditionLogic?: 'AND' | 'OR';
   actions?: AutomationActionConfig[];
 }
 
 export function automationsRouter(router: RouterType) {
-  // Create automation - requires manage access (user or workspace master)
-  router.post("/automations", async (request: any, env: Env & AuthEnv) => {
+  // Create automation - requires manage access
+  router.post('/automations', async (request: any, env: AutomationEnv & AuthEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
-    if (!resolved || !hasManageAccess(resolved.auth)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!requireRole(resolved, 'editor')) {
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
 
     const parsed = await request.json().catch(() => null);
     const validation = validateCreateAutomationBody(parsed);
     if (!validation.ok) {
-      return new Response(JSON.stringify({ error: validation.error }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return badRequestResponse(validation.error);
     }
     const body = validation.value;
 
-    const now = new Date().toISOString();
-    const automationId = crypto.randomUUID();
-
-    const entity: AutomationEntity = {
-      pk: `WS#${workspaceId}`,
-      sk: `AUTO#${automationId}`,
-      entityType: "AUTOMATION",
-      createdAt: now,
-      updatedAt: now,
+    const db = createRepositories(env);
+    const automation = await db.automations.create({
       workspaceId,
-      automationId,
       name: body.name,
       description: body.description,
-      status: "active",
-      triggerType: body.triggerType as AutomationEntity["triggerType"],
+      triggerType: body.triggerType as any,
       triggerConfig: body.triggerConfig as unknown as AutomationTriggerConfig,
+      conditionGroups: body.conditionGroups as unknown as AutomationConditionGroup[] | undefined,
+      conditionLogic: body.conditionLogic,
       actions: body.actions as unknown as AutomationActionConfig[],
-    };
+    });
 
-    await putEntity(env, entity as TableEntity);
     await invalidateAutomationCache(env, workspaceId);
 
-    return new Response(JSON.stringify({ automationId }), {
-      status: 201,
-      headers: { "Content-Type": "application/json" },
-    });
+    notifyWorkspaceActivity(env, workspaceId, `Automation "${body.name}" created`, `A new automation rule has been added to the workspace.`, { automationId: automation.automationId, automationName: body.name }).catch(() => {});
+
+    return createdResponse(toApiAutomation(automation));
   });
 
-  // List automations - any authenticated workspace context may read
-  router.get("/automations", async (request: any, env: Env & AuthEnv) => {
+  // List automations
+  router.get('/automations', async (request: any, env: AutomationEnv & AuthEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!resolved) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
-    const items = await queryByPk<AutomationEntity>(env, `WS#${workspaceId}`);
-    const automations = items.filter((e) => e.entityType === "AUTOMATION");
 
-    return new Response(JSON.stringify({ automations }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
+    const db = createRepositories(env);
+    const result = await db.automations.getAllByWorkspace(workspaceId);
+
+    return successResponse({
+      automations: result.items.map(toApiAutomation),
     });
   });
 
-  // Get automation - any authenticated workspace context may read
-  router.get("/automations/:automationId", async (request: any, env: Env & AuthEnv) => {
+  // Get automation
+  router.get('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!resolved) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
     const { automationId } = request.params;
-    const entity = await getEntity<AutomationEntity>(env, `WS#${workspaceId}`, `AUTO#${automationId}`);
-    if (!entity) {
-      return new Response(JSON.stringify({ error: "Not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+
+    const db = createRepositories(env);
+    const automation = await db.automations.getById(workspaceId, automationId);
+
+    if (!automation) {
+      return notFoundResponse('Automation not found');
     }
-    return new Response(JSON.stringify(entity), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+
+    return successResponse(toApiAutomation(automation));
   });
 
-  // Update automation - requires manage access
-  router.put("/automations/:automationId", async (request: any, env: Env & AuthEnv) => {
+  // Update automation
+  router.put('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
-    if (!resolved || !hasManageAccess(resolved.auth)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!requireRole(resolved, 'editor')) {
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
     const { automationId } = request.params;
+
     const body = (await request.json().catch(() => null)) as UpdateAutomationBody | null;
-
-    const existing = await getEntity<AutomationEntity>(env, `WS#${workspaceId}`, `AUTO#${automationId}`);
-    if (!existing) {
-      return new Response(JSON.stringify({ error: "Not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!body) {
+      return badRequestResponse('Empty payload');
     }
 
-    const now = new Date().toISOString();
-    const updated: AutomationEntity = {
-      ...existing,
-      name: body?.name ?? existing.name,
-      description: body?.description ?? existing.description,
-      status: body?.status ?? existing.status,
-      triggerType: body?.triggerType ?? existing.triggerType,
-      triggerConfig: body?.triggerConfig ?? existing.triggerConfig,
-      actions: body?.actions ?? existing.actions,
-      updatedAt: now,
-    };
+    const db = createRepositories(env);
+    const existing = await db.automations.getById(workspaceId, automationId);
 
-    await putEntity(env, updated as TableEntity);
+    if (!existing) {
+      return notFoundResponse('Automation not found');
+    }
+
+    const updated = await db.automations.update(workspaceId, automationId, {
+      name: body.name,
+      description: body.description,
+      status: body.status,
+      triggerType: body.triggerType as any,
+      triggerConfig: body.triggerConfig,
+      conditionGroups: body.conditionGroups,
+      conditionLogic: body.conditionLogic,
+      actions: body.actions,
+    });
+
     await invalidateAutomationCache(env, workspaceId);
 
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    if (!updated) {
+      return notFoundResponse('Automation not found');
+    }
+
+    notifyWorkspaceActivity(env, workspaceId, `Automation "${updated.name}" updated`, `Automation rule "${updated.name}" has been modified.`, { automationId, automationName: updated.name }).catch(() => {});
+
+    return successResponse(toApiAutomation(updated));
   });
 
-  // Delete automation - requires manage access
-  router.delete("/automations/:automationId", async (request: any, env: Env & AuthEnv) => {
+  // Delete automation
+  router.delete('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv) => {
     const resolved = await resolveWorkspace(env, request as Request);
-    if (!resolved || !hasManageAccess(resolved.auth)) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (!requireRole(resolved, 'admin')) {
+      return unauthorizedResponse();
     }
     const { workspaceId } = resolved;
     const { automationId } = request.params;
 
-    await deleteEntity(env, `WS#${workspaceId}`, `AUTO#${automationId}`);
+    const db = createRepositories(env);
+    const existing = await db.automations.getById(workspaceId, automationId);
+    await db.automations.delete(workspaceId, automationId);
     await invalidateAutomationCache(env, workspaceId);
 
-    return new Response(JSON.stringify({ ok: true }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    notifyWorkspaceActivity(env, workspaceId, `Automation "${existing?.name || automationId}" deleted`, `An automation rule has been removed from the workspace.`, { automationId, automationName: existing?.name }).catch(() => {});
+
+    return successResponse({ ok: true });
   });
 }

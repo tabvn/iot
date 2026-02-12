@@ -25,7 +25,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 interface AuthProviderProps {
   children: ReactNode;
-  initialSession?: { user: { id: string; email: string; avatarUrl?: string }; token: string } | null;
+  initialSession?: { user: { id: string; name?: string; email: string; avatarUrl?: string }; token: string } | null;
 }
 
 export function AuthProvider({ children, initialSession }: AuthProviderProps) {

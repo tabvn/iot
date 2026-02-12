@@ -1,7 +1,7 @@
 import type { DurableObjectState } from "@cloudflare/workers-types";
-import type { Env } from "@/storage";
-import { queryByPk, deleteEntity } from "@/storage";
-import type { DeviceEntity, AutomationEntity } from "@/models";
+import type { StorageEnv } from "@/db/storage";
+import { createRepositories } from "@/db";
+import { successResponse, notFoundResponse } from "@/api-responses";
 
 interface CleanupState {
   startedAt: string | null;
@@ -10,10 +10,10 @@ interface CleanupState {
 
 export class WorkspaceCleanupDurableObject {
   private state: DurableObjectState;
-  private env: Env;
+  private env: StorageEnv;
   private workspaceId: string;
 
-  constructor(state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: StorageEnv) {
     this.state = state;
     this.env = env;
     this.workspaceId = state.id.toString();
@@ -41,10 +41,7 @@ export class WorkspaceCleanupDurableObject {
     if (request.method === "POST" && pathname.endsWith("/start")) {
       const state = await this.getCleanupState();
       if (state.completedAt) {
-        return new Response(JSON.stringify({ ok: true, status: "completed" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return successResponse({ ok: true, status: "completed" });
       }
       if (!state.startedAt) {
         await this.setCleanupState({ startedAt: new Date().toISOString() });
@@ -60,46 +57,43 @@ export class WorkspaceCleanupDurableObject {
 
     if (request.method === "GET" && pathname.endsWith("/status")) {
       const state = await this.getCleanupState();
-      return new Response(JSON.stringify(state), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return successResponse(state);
     }
 
-    return new Response(JSON.stringify({ error: "Not found" }), {
-      status: 404,
-      headers: { "Content-Type": "application/json" },
-    });
+    return notFoundResponse();
   }
 
   private async runCleanup() {
-    const wsPk = `WS#${this.workspaceId}`;
+    const db = createRepositories(this.env);
+    const prefix = this.env.TABLE_BUCKET_PREFIX || "";
 
-    const entities = await queryByPk(this.env, wsPk);
-    const devices: DeviceEntity[] = entities.filter((e) => e.entityType === "DEVICE");
-    const automations: AutomationEntity[] = entities.filter((e) => e.entityType === "AUTOMATION");
+    // Get all devices in workspace
+    const devicesResult = await db.devices.getAllByWorkspace(this.workspaceId);
+    const devices = devicesResult.items;
 
+    // Clean up device data from R2
     for (const dev of devices) {
       const deviceId = dev.deviceId;
 
+      // Delete device data points
       const devDataList = await this.env.DEVICE_DATA_BUCKET.list({
-        prefix: `${this.env.TABLE_BUCKET_PREFIX}DEV_DATA#${deviceId}`,
+        prefix: `${prefix}DEV_DATA#${deviceId}`,
       });
       for (const obj of devDataList.objects) {
         await this.env.DEVICE_DATA_BUCKET.delete(obj.key);
       }
 
+      // Delete device data indexes
       const devIdxList = await this.env.DEVICE_DATA_BUCKET.list({
-        prefix: `${this.env.TABLE_BUCKET_PREFIX}DEV_IDX#${deviceId}`,
+        prefix: `${prefix}DEV_IDX#${deviceId}`,
       });
       for (const obj of devIdxList.objects) {
         await this.env.DEVICE_DATA_BUCKET.delete(obj.key);
       }
     }
 
-    for (const e of entities) {
-      await deleteEntity(this.env, wsPk, e.sk);
-    }
+    // Delete the workspace and all related entities
+    await db.workspaces.delete(this.workspaceId);
 
     await this.setCleanupState({ completedAt: new Date().toISOString() });
   }

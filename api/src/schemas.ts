@@ -30,6 +30,8 @@ export interface CreateAutomationBody {
   description?: string;
   triggerType: string;
   triggerConfig: Record<string, unknown>;
+  conditionGroups?: Array<Record<string, unknown>>;
+  conditionLogic?: 'AND' | 'OR';
   actions: Array<Record<string, unknown>>;
 }
 
@@ -106,6 +108,7 @@ export function validateCreateAutomationBody(
   if (!Array.isArray(b.actions) || b.actions.length === 0) {
     return { ok: false, error: "actions must be a non-empty array" };
   }
+  const full = body as Record<string, unknown>;
   return {
     ok: true,
     value: {
@@ -113,6 +116,8 @@ export function validateCreateAutomationBody(
       description: b.description,
       triggerType: b.triggerType,
       triggerConfig: b.triggerConfig as Record<string, unknown>,
+      conditionGroups: Array.isArray(full.conditionGroups) ? full.conditionGroups as Array<Record<string, unknown>> : undefined,
+      conditionLogic: full.conditionLogic === 'AND' || full.conditionLogic === 'OR' ? full.conditionLogic : undefined,
       actions: b.actions as Array<Record<string, unknown>>,
     },
   };

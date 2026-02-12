@@ -1,32 +1,37 @@
 import type { DurableObjectState } from "@cloudflare/workers-types";
-import type { Env } from "@/storage";
-import { queryByPk } from "@/storage";
-import type { AutomationEntity, ScheduleTriggerConfig } from "@/models";
+import type { StorageEnv } from "@/db/storage";
+import { queryByPk } from "@/db/storage";
+import type { AutomationEntity, ScheduleTriggerConfig, AutomationTriggerType } from "@/db/types";
 import {
   evaluateDeviceDataAutomations,
   evaluateDeviceStatusAutomations,
   evaluateScheduleAutomations,
-  executeActions,
+  executeActionsWithLogging,
+  recordExecutionLog,
   validateAutomationGraph,
   nextCronMatch,
 } from "@/automation-engine";
+import { dispatchAutomationNotification } from "@/notifications";
+import { getWorkspacePlan } from "@/rate-limit";
+import { successResponse, badRequestResponse, notFoundResponse } from "@/api-responses";
 
 export class WorkspaceAutomationDO {
   private state: DurableObjectState;
-  private env: Env;
+  private env: StorageEnv;
   private workspaceId: string;
   private automations: AutomationEntity[] = [];
   private loaded = false;
 
-  constructor(state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: StorageEnv) {
     this.state = state;
     this.env = env;
-    this.workspaceId = state.id.toString();
+    // idFromName() IDs expose .name with the original string; .toString() returns hex
+    this.workspaceId = (state.id as any).name ?? state.id.toString();
   }
 
   private async loadAutomations() {
-    const items = await queryByPk(this.env, `WS#${this.workspaceId}`);
-    this.automations = items.filter((e): e is AutomationEntity => e.entityType === "AUTOMATION");
+    const result = await queryByPk(this.env, `WS#${this.workspaceId}`);
+    this.automations = result.items.filter((e: any): e is AutomationEntity => e.entityType === "AUTOMATION");
     this.loaded = true;
 
     const warnings = validateAutomationGraph(this.automations);
@@ -39,6 +44,31 @@ export class WorkspaceAutomationDO {
     if (!this.loaded) {
       await this.loadAutomations();
     }
+  }
+
+  private async executeWithLogging(
+    auto: AutomationEntity,
+    triggerType: AutomationTriggerType,
+    triggerData: Record<string, unknown>,
+    context: Record<string, any>
+  ) {
+    const start = Date.now();
+    const actionResults = await executeActionsWithLogging(this.env as any, this.workspaceId, auto.actions, context);
+    const totalDurationMs = Date.now() - start;
+    const plan = await getWorkspacePlan(this.env, this.workspaceId);
+    const logEntity = await recordExecutionLog(
+      this.env,
+      this.workspaceId,
+      auto,
+      triggerType,
+      triggerData,
+      actionResults,
+      totalDurationMs,
+      plan
+    );
+    await dispatchAutomationNotification(this.env, this.workspaceId, auto, logEntity).catch((err) => {
+      console.error("[automation][notification][error]", err);
+    });
   }
 
   private async scheduleNextAlarm() {
@@ -72,11 +102,8 @@ export class WorkspaceAutomationDO {
     const now = new Date();
     const matches = await evaluateScheduleAutomations(this.env, this.workspaceId, this.automations, now);
     for (const auto of matches) {
-      await executeActions(this.env, this.workspaceId, auto.actions, {
-        now: now.toISOString(),
-        trigger: "schedule",
-        automationId: auto.automationId,
-      });
+      const context = { now: now.toISOString(), trigger: "schedule", automationId: auto.automationId };
+      await this.executeWithLogging(auto, "schedule", { now: now.toISOString() }, context);
     }
     await this.scheduleNextAlarm();
   }
@@ -88,7 +115,7 @@ export class WorkspaceAutomationDO {
     if (request.method === "POST" && pathname.endsWith("/invalidate")) {
       await this.loadAutomations();
       await this.scheduleNextAlarm();
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return successResponse({ ok: true });
     }
 
     if (request.method === "POST" && pathname.endsWith("/event/device-data")) {
@@ -96,16 +123,14 @@ export class WorkspaceAutomationDO {
         deviceId: string;
         fields: Record<string, any>;
       } | null;
-      if (!body) return new Response(JSON.stringify({ error: "Bad Request" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      if (!body) return badRequestResponse("Invalid request body");
       await this.ensureAutomationsLoaded();
       const matches = await evaluateDeviceDataAutomations(this.env, this.workspaceId, this.automations, body.deviceId, body.fields);
       for (const auto of matches) {
-        await executeActions(this.env, this.workspaceId, auto.actions, {
-          deviceId: body.deviceId,
-          fields: body.fields,
-        });
+        const context = { deviceId: body.deviceId, fields: body.fields };
+        await this.executeWithLogging(auto, "device_data", { deviceId: body.deviceId, fields: body.fields }, context);
       }
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return successResponse({ ok: true });
     }
 
     if (request.method === "POST" && pathname.endsWith("/event/device-status")) {
@@ -113,16 +138,14 @@ export class WorkspaceAutomationDO {
         deviceId: string;
         status: "online" | "offline";
       } | null;
-      if (!body) return new Response(JSON.stringify({ error: "Bad Request" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      if (!body) return badRequestResponse("Invalid request body");
       await this.ensureAutomationsLoaded();
       const matches = await evaluateDeviceStatusAutomations(this.env, this.workspaceId, this.automations, body.deviceId, body.status);
       for (const auto of matches) {
-        await executeActions(this.env, this.workspaceId, auto.actions, {
-          deviceId: body.deviceId,
-          status: body.status,
-        });
+        const context = { deviceId: body.deviceId, status: body.status };
+        await this.executeWithLogging(auto, "device_status", { deviceId: body.deviceId, status: body.status }, context);
       }
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return successResponse({ ok: true });
     }
 
     if (request.method === "POST" && pathname.endsWith("/event/schedule-tick")) {
@@ -131,16 +154,13 @@ export class WorkspaceAutomationDO {
       await this.ensureAutomationsLoaded();
       const matches = await evaluateScheduleAutomations(this.env, this.workspaceId, this.automations, now);
       for (const auto of matches) {
-        await executeActions(this.env, this.workspaceId, auto.actions, {
-          now: now.toISOString(),
-          trigger: "schedule",
-          automationId: auto.automationId,
-        });
+        const context = { now: now.toISOString(), trigger: "schedule", automationId: auto.automationId };
+        await this.executeWithLogging(auto, "schedule", { now: now.toISOString() }, context);
       }
       await this.scheduleNextAlarm();
-      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return successResponse({ ok: true });
     }
 
-    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    return notFoundResponse();
   }
 }

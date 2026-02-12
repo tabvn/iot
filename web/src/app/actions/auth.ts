@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 
 interface LoginResult {
   success: true;
-  user: { id: string; email: string; avatarUrl?: string };
+  user: { id: string; name?: string; email: string; avatarUrl?: string };
   token: string;
 }
 
@@ -31,7 +31,7 @@ export async function loginAction(
     const me = await apiGetMe(jwt);;
     return {
       success: true,
-      user: { id: me.userId, email: me.email, avatarUrl: me.avatarUrl },
+      user: { id: me.userId, name: me.name, email: me.email, avatarUrl: me.avatarUrl },
       token: jwt,
     };
   } catch (err: any) {
@@ -56,6 +56,16 @@ export async function signupAction(
   } catch (err: any) {
     return { success: false, error: err?.message || "Sign up failed" };
   }
+}
+
+/**
+ * Set auth cookie directly (used by invitation accept flow for auto-created users).
+ */
+export async function setAuthFromInvitation(
+  token: string,
+  sessionId: string
+): Promise<void> {
+  await setAuthCookie(token, sessionId, false);
 }
 
 export async function logoutAction(): Promise<void> {

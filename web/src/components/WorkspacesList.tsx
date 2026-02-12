@@ -14,16 +14,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiListWorkspaces, apiCreateWorkspace, apiCheckSlugAvailable } from "@/lib/api";
+import { apiListWorkspaces, apiCreateWorkspace, apiCheckSlugAvailable, type WorkspaceDetail } from "@/lib/api";
 import { toast } from "sonner";
 
-interface ApiWorkspace {
-  workspaceId: string;
-  name: string;
-  slug: string;
-  description?: string;
-  createdAt: string;
-}
 
 function nameToSlug(name: string): string {
   return name
@@ -85,7 +78,7 @@ type CreateWorkspaceFormValues = z.infer<typeof createWorkspaceSchema>;
 export function WorkspacesList() {
   const router = useRouter();
   const { token, user, isLoading: authLoading } = useAuth();
-  const [workspaces, setWorkspaces] = useState<ApiWorkspace[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);

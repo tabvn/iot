@@ -16,6 +16,8 @@
       "@/*": ["*"],
       "@/models": ["models"],
       "@/storage": ["storage"],
+      "@/db": ["db/index"],
+      "@/db/*": ["db/*"],
       "@/routes/*": ["routes/*"]
     }
   },

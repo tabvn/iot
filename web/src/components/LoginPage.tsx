@@ -1,7 +1,7 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Mail, Lock, Eye, EyeOff, ArrowLeft, Github } from 'lucide-react';
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -23,22 +23,35 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 export function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { login } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Get email and returnUrl from search params
+  const prefillEmail = searchParams.get('email') || '';
+  const returnUrl = searchParams.get('returnUrl') || '/dashboard';
 
   const {
     register,
     handleSubmit,
     formState: { errors },
+    setValue,
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: "",
+      email: prefillEmail,
       password: "",
       rememberMe: false,
     },
   });
+
+  // Set email value when it changes
+  useEffect(() => {
+    if (prefillEmail) {
+      setValue('email', prefillEmail);
+    }
+  }, [prefillEmail, setValue]);
 
   const onSubmit = async (values: LoginFormValues) => {
     setLoading(true);
@@ -46,7 +59,7 @@ export function LoginPage() {
     try {
       await login(values.email, values.password, values.rememberMe);
       toast.success('Welcome back! 🎉');
-      router.push('/dashboard');
+      router.push(returnUrl);
     } catch (error: any) {
       toast.error(error?.message || 'Login failed. Please try again.');
     } finally {
