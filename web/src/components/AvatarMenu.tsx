@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
+import { useACL } from "@/lib/acl";
 
 interface AvatarMenuProps {
   currentWorkspaceId?: string;
@@ -19,6 +20,7 @@ export function AvatarMenu({ currentWorkspaceId }: AvatarMenuProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, logout } = useAuth();
+  const { can, role } = useACL();
 
   // Get current workspace from URL
   const pathParts = pathname.split('/').filter(Boolean);
@@ -83,6 +85,16 @@ export function AvatarMenu({ currentWorkspaceId }: AvatarMenuProps) {
               <div className="flex items-center gap-1.5 mt-1">
                 <div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
                 <span className="text-xs text-gray-500 font-medium">Active</span>
+                {workspace && role && (
+                  <span className={`ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide ${
+                    role === 'owner' ? 'bg-amber-100 text-amber-700' :
+                    role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                    role === 'editor' ? 'bg-blue-100 text-blue-700' :
+                    'bg-gray-100 text-gray-600'
+                  }`}>
+                    {role}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -99,7 +111,7 @@ export function AvatarMenu({ currentWorkspaceId }: AvatarMenuProps) {
             </Link>
           </DropdownMenuItem>
 
-          {workspace && (
+          {workspace && can('workspace:manage_settings') && (
             <DropdownMenuItem asChild>
               <Link href={`/${workspace}/settings`} className="flex items-center gap-3 px-4 py-3 text-sm text-gray-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-purple-50 rounded-xl cursor-pointer transition-all group">
                 <div className="w-9 h-9 rounded-lg bg-gray-100 group-hover:bg-blue-100 flex items-center justify-center transition-colors">

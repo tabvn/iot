@@ -228,7 +228,18 @@ export function ApiIntegrationSettings({
                     </div>
                   </div>
                   <div className="flex items-center gap-2 bg-gray-900 text-gray-100 p-3 rounded-lg font-mono text-xs sm:text-sm overflow-x-auto">
-                    <code className="flex-1 truncate">wsk_••••••••••••••••</code>
+                    <code className="flex-1 truncate">{apiKey.keyPrefix}••••••••••••</code>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-gray-400 hover:text-white hover:bg-gray-800 flex-shrink-0 h-7 w-7 p-0"
+                      onClick={() => {
+                        navigator.clipboard.writeText(apiKey.keyPrefix);
+                        toast.success('Key prefix copied to clipboard');
+                      }}
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
                 </div>
               ))}

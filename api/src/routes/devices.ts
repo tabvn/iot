@@ -14,6 +14,10 @@ import {
 } from '@/api-responses';
 import { notifyWorkspaceActivity } from '@/notifications';
 
+interface DevicesEnv extends AuthEnv, StorageEnv {
+  DEVICE_DO: DurableObjectNamespace;
+}
+
 export function devicesRouter(router: RouterType) {
   // Create device within workspace - requires manage access
   router.post('/devices', async (request: Request, env: AuthEnv & StorageEnv) => {
@@ -136,6 +140,8 @@ export function devicesRouter(router: RouterType) {
           precision: fm.precision,
           icon: fm.icon,
           color: fm.color,
+          controllable: fm.controllable === true ? true : undefined,
+          defaultValue: fm.defaultValue,
         }));
     }
 
@@ -193,5 +199,47 @@ export function devicesRouter(router: RouterType) {
     notifyWorkspaceActivity(env, workspaceId, `Device "${existing.name}" deleted`, `Device ${existing.name} has been removed from the workspace.`, { deviceId, deviceName: existing.name }).catch(() => {});
 
     return successResponse({ ok: true });
+  });
+
+  // Send control command to a device field
+  router.post('/devices/:deviceId/control', async (request: any, env: DevicesEnv) => {
+    const resolved = await resolveWorkspace(env, request as Request);
+    if (!requireRole(resolved, 'editor')) {
+      return unauthorizedResponse();
+    }
+    const { workspaceId, auth } = resolved;
+    const { deviceId } = request.params;
+
+    // Device tokens can only control themselves
+    if (auth.type === 'device' && auth.deviceId !== deviceId) {
+      return forbiddenResponse('Device token does not match deviceId');
+    }
+
+    const body = await (request as Request).json().catch(() => null) as { field?: string; value?: unknown } | null;
+    if (!body || typeof body.field !== 'string') {
+      return badRequestResponse('Missing field name');
+    }
+
+    const db = createRepositories(env);
+    const device = await db.devices.getById(workspaceId, deviceId);
+    if (!device) {
+      return notFoundResponse('Device not found');
+    }
+
+    // Validate the field is controllable
+    const mapping = device.fieldMappings?.find((fm) => fm.sourceField === body.field);
+    if (!mapping?.controllable) {
+      return forbiddenResponse('Field is not controllable');
+    }
+
+    // Forward to Device DO /control endpoint
+    const doName = `${workspaceId}:${deviceId}`;
+    const id = env.DEVICE_DO.idFromName(doName);
+    const stub = env.DEVICE_DO.get(id);
+    return stub.fetch('https://device/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'set_field', field: body.field, value: body.value }),
+    });
   });
 }

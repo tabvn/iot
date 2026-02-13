@@ -117,6 +117,42 @@ export function usersRouter(router: RouterType) {
     });
   });
 
+  // Change password
+  router.post('/users/change-password', async (request: Request, env: UserEnv) => {
+    const auth = await getAuthFromRequest(env, request);
+    if (!auth?.userId) {
+      return unauthorizedResponse();
+    }
+
+    const body = (await request.json().catch(() => null)) as {
+      currentPassword?: string;
+      newPassword?: string;
+    } | null;
+
+    if (!body?.currentPassword || !body?.newPassword) {
+      return badRequestResponse('currentPassword and newPassword are required');
+    }
+
+    if (body.newPassword.length < 8) {
+      return badRequestResponse('New password must be at least 8 characters');
+    }
+
+    const db = createRepositories(env);
+    const existing = await db.users.getById(auth.userId);
+
+    if (!existing) {
+      return notFoundResponse('User not found');
+    }
+
+    if (existing.passwordHash !== body.currentPassword) {
+      return forbiddenResponse('Current password is incorrect');
+    }
+
+    await db.users.update(auth.userId, { passwordHash: body.newPassword });
+
+    return successResponse({ ok: true });
+  });
+
   // Update user
   router.put('/users/:userId', async (request: any, env: UserEnv) => {
     const auth = await getAuthFromRequest(env, request);

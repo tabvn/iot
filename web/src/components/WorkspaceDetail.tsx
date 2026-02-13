@@ -1,23 +1,15 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import { Plus, Wifi, WifiOff, AlertTriangle, Thermometer, Droplet, Zap, Code, Settings, Activity, Clock, MapPin, Network, CheckCircle2, XCircle, AlertCircle, Info, Cpu, Package, Share2, Loader2 } from "lucide-react";
+import { Plus, Wifi, WifiOff, AlertTriangle, Zap, Code, Activity, Clock, Cpu, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Device, DeviceStatus, DataFieldMapping } from "@/app/types";
-import { DeviceControl } from "@/components/DeviceControl";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiListDevices, type DeviceDetail } from "@/lib/api";
+import { apiListDevices, apiControlDeviceField, type DeviceDetail } from "@/lib/api";
 import { ShowIf } from "@/lib/acl";
 
 export function WorkspaceDetail() {
@@ -227,6 +219,106 @@ export function WorkspaceDetail() {
                     </div>
                   </div>
                 </CardHeader>
+
+                {/* Field Values & Controls */}
+                {((device.fieldMappings && device.fieldMappings.length > 0) || (device.lastData && Object.keys(device.lastData).length > 0)) && (
+                  <div className="px-6 pb-2">
+                    <div className="border-t border-gray-100 pt-3 space-y-2">
+                      {(device.fieldMappings && device.fieldMappings.length > 0
+                        ? device.fieldMappings.map((fm) => {
+                            const raw = device.lastData?.[fm.sourceField];
+                            const fallback = fm.defaultValue ?? (fm.dataType === "boolean" ? false : fm.dataType === "number" ? (fm.min ?? 0) : "");
+                            return {
+                              key: fm.sourceField,
+                              label: fm.displayLabel,
+                              value: raw !== undefined ? raw : fallback,
+                              unit: fm.unit,
+                              dataType: fm.dataType,
+                              controllable: fm.controllable,
+                              min: fm.min,
+                              max: fm.max,
+                            };
+                          })
+                        : Object.entries(device.lastData!).map(([key, value]) => ({
+                            key,
+                            label: key,
+                            value,
+                            unit: undefined,
+                            dataType: typeof value === "boolean" ? "boolean" as const : typeof value === "number" ? "number" as const : "string" as const,
+                            controllable: false,
+                            min: undefined,
+                            max: undefined,
+                          }))
+                      ).map((field) => (
+                        <div key={field.key} className="flex items-center justify-between gap-2 min-h-[28px]">
+                          <span className="text-xs text-gray-500 truncate flex-shrink-0">{field.label}</span>
+                          {field.controllable && field.dataType === "boolean" ? (
+                            <Switch
+                              checked={field.value === true}
+                              onCheckedChange={async (checked) => {
+                                if (!token) return;
+                                // Optimistic update
+                                setDevices((prev) =>
+                                  prev.map((d) =>
+                                    d.deviceId === device.deviceId
+                                      ? { ...d, lastData: { ...d.lastData, [field.key]: checked } }
+                                      : d
+                                  )
+                                );
+                                try {
+                                  await apiControlDeviceField(token, workspaceParam, device.deviceId, field.key, checked);
+                                } catch (err: any) {
+                                  toast.error(err.message || "Control failed");
+                                  // Revert
+                                  setDevices((prev) =>
+                                    prev.map((d) =>
+                                      d.deviceId === device.deviceId
+                                        ? { ...d, lastData: { ...d.lastData, [field.key]: !checked } }
+                                        : d
+                                    )
+                                  );
+                                }
+                              }}
+                            />
+                          ) : field.controllable && field.dataType === "number" && field.min !== undefined && field.max !== undefined ? (
+                            <div className="flex items-center gap-2 flex-1 max-w-[140px]">
+                              <Slider
+                                value={[typeof field.value === "number" ? field.value : field.min]}
+                                min={field.min}
+                                max={field.max}
+                                step={1}
+                                className="flex-1"
+                                onValueCommit={async ([val]) => {
+                                  if (!token) return;
+                                  setDevices((prev) =>
+                                    prev.map((d) =>
+                                      d.deviceId === device.deviceId
+                                        ? { ...d, lastData: { ...d.lastData, [field.key]: val } }
+                                        : d
+                                    )
+                                  );
+                                  try {
+                                    await apiControlDeviceField(token, workspaceParam, device.deviceId, field.key, val);
+                                  } catch (err: any) {
+                                    toast.error(err.message || "Control failed");
+                                  }
+                                }}
+                              />
+                              <span className="text-xs font-medium text-gray-700 w-8 text-right">
+                                {typeof field.value === "number" ? field.value : "—"}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs font-medium text-gray-900 truncate">
+                              {field.value === true ? "On" : field.value === false ? "Off" : String(field.value ?? "—")}
+                              {field.unit ? ` ${field.unit}` : ""}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <CardContent className="space-y-4 pt-0">
                   <Button

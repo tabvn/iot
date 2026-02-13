@@ -21,7 +21,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { apiCreateDevice, apiUpdateDevice, type CreateDevicePayload, type DeviceDetail } from "@/lib/api";
 import { DeviceType } from "@/types/models";
 import { DEVICE_TYPES, DATA_TYPES } from "@/types/constants";
-import { useEffect } from "react";
 
 // ============================================================================
 // Enums for form field mapping data types (matches backend)
@@ -104,16 +103,34 @@ export function DeviceForm({ workspaceSlug, mode, deviceId, initialData }: Devic
   const isMutating = isCreating || isUpdating;
   const formId = mode === "create" ? "add-device-form" : "edit-device-form";
 
+  const editDefaults = mode === "edit" && initialData ? {
+    name: initialData.name || "",
+    type: initialData.type as DeviceType,
+    description: initialData.description || "",
+    manufacturer: initialData.manufacturer || "",
+    model: initialData.model || "",
+    firmwareVersion: initialData.firmwareVersion || "",
+    location: initialData.location || "",
+    fieldMappings: initialData.fieldMappings?.map((fm) => ({
+      sourceField: fm.sourceField,
+      displayLabel: fm.displayLabel,
+      dataType: fm.dataType as FieldMappingDataType,
+      unit: fm.unit || "",
+      min: fm.min,
+      max: fm.max,
+      precision: fm.precision,
+    })) || [],
+  } : undefined;
+
   const {
     register,
     control,
     handleSubmit,
     watch,
-    reset,
     formState: { errors },
   } = useForm<DeviceFormValues>({
     resolver: zodResolver(deviceFormSchema),
-    defaultValues: {
+    defaultValues: editDefaults ?? {
       name: "",
       type: undefined,
       description: "",
@@ -124,30 +141,6 @@ export function DeviceForm({ workspaceSlug, mode, deviceId, initialData }: Devic
       fieldMappings: [],
     },
   });
-
-  // Populate form with initial data for edit mode
-  useEffect(() => {
-    if (mode === "edit" && initialData) {
-      reset({
-        name: initialData.name || "",
-        type: initialData.type as DeviceType,
-        description: initialData.description || "",
-        manufacturer: initialData.manufacturer || "",
-        model: initialData.model || "",
-        firmwareVersion: initialData.firmwareVersion || "",
-        location: initialData.location || "",
-        fieldMappings: initialData.fieldMappings?.map((fm) => ({
-          sourceField: fm.sourceField,
-          displayLabel: fm.displayLabel,
-          dataType: fm.dataType as FieldMappingDataType,
-          unit: fm.unit || "",
-          min: fm.min,
-          max: fm.max,
-          precision: fm.precision,
-        })) || [],
-      });
-    }
-  }, [mode, initialData, reset]);
 
   const { fields, append, remove } = useFieldArray({
     control,

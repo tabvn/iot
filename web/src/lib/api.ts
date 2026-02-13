@@ -77,6 +77,19 @@ export async function apiUpdateUser(
   return handleResponse<ApiUser>(res, "Failed to update user");
 }
 
+export async function apiChangePassword(
+  token: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/users/change-password`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  return handleResponse(res, "Failed to change password");
+}
+
 // ============================================================================
 // Workspace types & API
 // ============================================================================
@@ -157,6 +170,8 @@ export interface DeviceFieldMapping {
   precision?: number;
   icon?: string;
   color?: string;
+  controllable?: boolean;
+  defaultValue?: unknown;
 }
 
 export interface DeviceDetail {
@@ -222,6 +237,14 @@ export async function apiUpdateDevice(token: string, workspaceSlug: string, devi
     body: JSON.stringify(payload),
   });
   return handleResponse(res, "Failed to update device");
+}
+
+export async function apiDeleteDevice(token: string, workspaceSlug: string, deviceId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}`, {
+    method: "DELETE",
+    headers: authHeaders(token, workspaceSlug),
+  });
+  return handleResponse(res, "Failed to delete device");
 }
 
 // ============================================================================
@@ -325,6 +348,21 @@ export async function apiRevokeDeviceApiKey(token: string, workspaceSlug: string
     headers: authHeaders(token, workspaceSlug),
   });
   return handleResponse(res, "Failed to revoke device API key");
+}
+
+export async function apiControlDeviceField(
+  token: string,
+  workspaceSlug: string,
+  deviceId: string,
+  field: string,
+  value: unknown,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/devices/${deviceId}/control`, {
+    method: "POST",
+    headers: authHeaders(token, workspaceSlug),
+    body: JSON.stringify({ field, value }),
+  });
+  return handleResponse(res, "Failed to send control command");
 }
 
 // ============================================================================

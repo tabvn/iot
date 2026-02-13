@@ -2,7 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import useSWRMutation from "swr/mutation";
-import { User, Key, Shield, Bell, Camera, Save, ArrowLeft } from "lucide-react";
+import { User, Key, Shield, Bell, Camera, Save, ArrowLeft, Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,15 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiUpdateUser } from "@/lib/api";
+import { apiUpdateUser, apiChangePassword } from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useEffect, useState } from "react";
 import {cn} from "@/components/ui/utils";
 
@@ -26,6 +34,13 @@ export function AccountPage() {
   const [notifications, setNotifications] = useState(true);
   const [twoFactor, setTwoFactor] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || "");
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const {
     register,
     handleSubmit,
@@ -96,6 +111,39 @@ export function AccountPage() {
       toast.success("Avatar updated");
     } catch (err: any) {
       toast.error(err?.message || "Avatar upload failed");
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!token || !user) return;
+    if (!currentPassword) {
+      toast.error("Current password is required");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("New password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("Passwords do not match");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      toast.error("New password must be different from current password");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await apiChangePassword(token, currentPassword, newPassword);
+      toast.success("Password changed successfully");
+      setPasswordDialogOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to change password");
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -214,7 +262,7 @@ export function AccountPage() {
                 <Label>Change Password</Label>
                 <p className="text-sm text-gray-500">Update your password regularly</p>
               </div>
-              <Button variant="outline" className="gap-2">
+              <Button variant="outline" className="gap-2" onClick={() => setPasswordDialogOpen(true)}>
                 <Key className="w-4 h-4" />
                 Change
               </Button>
@@ -242,6 +290,95 @@ export function AccountPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Change Password Dialog */}
+      <Dialog open={passwordDialogOpen} onOpenChange={(open) => {
+        setPasswordDialogOpen(open);
+        if (!open) {
+          setCurrentPassword("");
+          setNewPassword("");
+          setConfirmPassword("");
+          setShowCurrentPassword(false);
+          setShowNewPassword(false);
+        }
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Change Password</DialogTitle>
+            <DialogDescription>Enter your current password and choose a new one.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="current-password">Current Password</Label>
+              <div className="relative">
+                <Input
+                  id="current-password"
+                  type={showCurrentPassword ? "text" : "password"}
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="h-11 pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-11 w-10"
+                  onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                >
+                  {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-password">New Password</Label>
+              <div className="relative">
+                <Input
+                  id="new-password"
+                  type={showNewPassword ? "text" : "password"}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="h-11 pr-10"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-0 top-0 h-11 w-10"
+                  onClick={() => setShowNewPassword(!showNewPassword)}
+                >
+                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </Button>
+              </div>
+              <p className="text-xs text-gray-500">Must be at least 8 characters</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">Confirm New Password</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="h-11"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPasswordDialogOpen(false)} disabled={changingPassword}>
+              Cancel
+            </Button>
+            <Button onClick={handleChangePassword} disabled={changingPassword}>
+              {changingPassword ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Changing...
+                </>
+              ) : (
+                "Change Password"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

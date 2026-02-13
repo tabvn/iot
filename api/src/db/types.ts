@@ -134,6 +134,8 @@ export interface DeviceFieldMapping {
   precision?: number;
   icon?: string;
   color?: string;
+  controllable?: boolean;
+  defaultValue?: unknown;
 }
 
 export interface DeviceEntity extends BaseEntity {

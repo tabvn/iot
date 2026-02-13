@@ -155,10 +155,26 @@ export function ACLProvider({ children, membership, isLoading = false }: ACLProv
 /**
  * Main hook to access ACL context
  */
+const EMPTY_ACL: ACLContextValue = {
+  role: null,
+  membership: null,
+  isLoading: false,
+  can: () => false,
+  canAll: () => false,
+  canAny: () => false,
+  isAtLeast: () => false,
+  isRole: () => false,
+  isOwner: false,
+  isAdmin: false,
+  isEditor: false,
+  permissions: [],
+  roleInfo: null,
+};
+
 export function useACL(): ACLContextValue {
   const context = useContext(ACLContext);
   if (context === undefined) {
-    throw new Error('useACL must be used within an ACLProvider');
+    return EMPTY_ACL;
   }
   return context;
 }

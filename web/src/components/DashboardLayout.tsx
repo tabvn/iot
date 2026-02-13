@@ -9,7 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { AvatarMenu } from "@/components/AvatarMenu";
 import { useAuth } from "@/contexts/AuthContext";
-// ACL hooks available if needed: import { useACL, ShowIf } from "@/lib/acl";
+import { useACL } from "@/lib/acl";
 import {
   apiListWorkspaces,
   apiGetUnreadCount,
@@ -51,6 +51,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const workspace = (!pathParts[0] || pathParts[0] === 'dashboard' || pathParts[0] === 'developer')
     ? null
     : pathParts[0];
+
+  const { can } = useACL();
 
   const [workspaces, setWorkspaces] = useState<WorkspaceDetail[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -257,32 +259,36 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                     <span className="font-semibold">Devices</span>
                   </Button>
                 </Link>
-                <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/automations`}>
-                  <Button
-                    variant="ghost"
-                    className={`gap-2 px-4 h-9 transition-all ${
-                      isAutomationActive
-                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-md hover:shadow-lg hover:from-purple-600 hover:to-pink-600'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                    }`}
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    <span className="font-semibold">Automation</span>
-                  </Button>
-                </Link>
-                <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/api`}>
-                  <Button
-                    variant="ghost"
-                    className={`gap-2 px-4 h-9 transition-all ${
-                      isApiActive
-                        ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md hover:shadow-lg hover:from-emerald-600 hover:to-teal-600'
-                        : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
-                    }`}
-                  >
-                    <Code className="w-4 h-4" />
-                    <span className="font-semibold">API & Docs</span>
-                  </Button>
-                </Link>
+                {can('automations:view') && (
+                  <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/automations`}>
+                    <Button
+                      variant="ghost"
+                      className={`gap-2 px-4 h-9 transition-all ${
+                        isAutomationActive
+                          ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-md hover:shadow-lg hover:from-purple-600 hover:to-pink-600'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                      }`}
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span className="font-semibold">Automation</span>
+                    </Button>
+                  </Link>
+                )}
+                {can('api_keys:view') && (
+                  <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/api`}>
+                    <Button
+                      variant="ghost"
+                      className={`gap-2 px-4 h-9 transition-all ${
+                        isApiActive
+                          ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md hover:shadow-lg hover:from-emerald-600 hover:to-teal-600'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                      }`}
+                    >
+                      <Code className="w-4 h-4" />
+                      <span className="font-semibold">API & Docs</span>
+                    </Button>
+                  </Link>
+                )}
               </nav>
             )}
 
@@ -449,28 +455,32 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                   <span className="font-semibold">Devices</span>
                 </Button>
               </Link>
-              <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/automations`} onClick={() => setSidebarOpen(false)}>
-                <Button
-                  variant="ghost"
-                  className={`w-full justify-start gap-3 h-11 ${
-                    isAutomationActive ? 'bg-purple-50 text-purple-700' : 'text-gray-600'
-                  }`}
-                >
-                  <Sparkles className="w-5 h-5" />
-                  <span className="font-semibold">Automation</span>
-                </Button>
-              </Link>
-              <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/api`} onClick={() => setSidebarOpen(false)}>
-                <Button
-                  variant="ghost"
-                  className={`w-full justify-start gap-3 h-11 ${
-                    isApiActive ? 'bg-emerald-50 text-emerald-700' : 'text-gray-600'
-                  }`}
-                >
-                  <Code className="w-5 h-5" />
-                  <span className="font-semibold">API & Docs</span>
-                </Button>
-              </Link>
+              {can('automations:view') && (
+                <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/automations`} onClick={() => setSidebarOpen(false)}>
+                  <Button
+                    variant="ghost"
+                    className={`w-full justify-start gap-3 h-11 ${
+                      isAutomationActive ? 'bg-purple-50 text-purple-700' : 'text-gray-600'
+                    }`}
+                  >
+                    <Sparkles className="w-5 h-5" />
+                    <span className="font-semibold">Automation</span>
+                  </Button>
+                </Link>
+              )}
+              {can('api_keys:view') && (
+                <Link href={`/${currentWorkspace.slug || currentWorkspace.workspaceId}/api`} onClick={() => setSidebarOpen(false)}>
+                  <Button
+                    variant="ghost"
+                    className={`w-full justify-start gap-3 h-11 ${
+                      isApiActive ? 'bg-emerald-50 text-emerald-700' : 'text-gray-600'
+                    }`}
+                  >
+                    <Code className="w-5 h-5" />
+                    <span className="font-semibold">API & Docs</span>
+                  </Button>
+                </Link>
+              )}
             </div>
           )}
         </div>

@@ -8,7 +8,7 @@ import {
   AlertCircle, CheckCircle2, Loader2,
   Wifi, BarChart3, LineChart, FileJson, Search, X, Copy, Check,
   ChevronDown, ChevronUp, Table, RefreshCw, Pencil,
-  Key, Shield, RotateCw, Trash2, Terminal,
+  Key, Shield, RotateCw, Trash2, Terminal, Sliders,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +17,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +49,8 @@ import {
   apiGetDeviceApiKey,
   apiCreateDeviceApiKey,
   apiRevokeDeviceApiKey,
+  apiControlDeviceField,
+  apiDeleteDevice,
   type DeviceDetail,
   type AnalyticsResponse,
   type AnalyticsPoint,
@@ -160,6 +164,8 @@ export function DeviceAnalytics() {
   const [showRevokeConfirm, setShowRevokeConfirm] = useState(false);
   const [keyActionLoading, setKeyActionLoading] = useState(false);
   const [codeTab, setCodeTab] = useState<"javascript" | "go" | "cpp" | "esp32">("javascript");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Compute from/to based on time range — stabilize to minute boundary to avoid
   // SWR key changing every millisecond and causing infinite re-fetches.
@@ -397,6 +403,21 @@ export function DeviceAnalytics() {
     [sortField],
   );
 
+  // ---- Delete device handler ----
+
+  const handleDeleteDevice = useCallback(async () => {
+    if (!token) return;
+    setIsDeleting(true);
+    try {
+      await apiDeleteDevice(token, workspaceSlug, deviceId);
+      toast.success("Device deleted");
+      router.push(`/${workspaceSlug}`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to delete device");
+      setIsDeleting(false);
+    }
+  }, [token, workspaceSlug, deviceId, router]);
+
   // ---- Device API Key handlers ----
 
   const handleGenerateKey = useCallback(async () => {
@@ -550,6 +571,17 @@ export function DeviceAnalytics() {
                 <FileJson className="w-4 h-4" />
                 <span className="hidden sm:inline">JSON</span>
               </Button>
+              <ShowIf permission="devices:delete">
+                <Button
+                  variant="outline"
+                  onClick={() => setDeleteDialogOpen(true)}
+                  className="gap-2 flex-1 sm:flex-none text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                  size="sm"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Delete</span>
+                </Button>
+              </ShowIf>
             </div>
           </div>
         </div>
@@ -636,6 +668,103 @@ export function DeviceAnalytics() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Device Controls — only if device has controllable fields */}
+          {device.fieldMappings?.some((fm) => fm.controllable) && (
+            <Card className="border border-gray-200">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Sliders className="w-5 h-5 text-blue-600" />
+                  Device Controls
+                </CardTitle>
+                <CardDescription>Control device fields in real-time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {device.fieldMappings
+                    ?.filter((fm) => fm.controllable)
+                    .map((fm) => {
+                      const raw = device.lastData?.[fm.sourceField];
+                      const value = raw !== undefined ? raw : (fm.defaultValue ?? (fm.dataType === "boolean" ? false : fm.dataType === "number" ? (fm.min ?? 0) : ""));
+                      return (
+                        <div key={fm.sourceField} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-semibold text-gray-900">{fm.displayLabel}</span>
+                            {fm.unit && (
+                              <Badge variant="outline" className="text-[10px] h-5">{fm.unit}</Badge>
+                            )}
+                          </div>
+
+                          {fm.dataType === "boolean" ? (
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-gray-500">{value === true ? "On" : "Off"}</span>
+                              <Switch
+                                checked={value === true}
+                                onCheckedChange={async (checked) => {
+                                  if (!token) return;
+                                  try {
+                                    await apiControlDeviceField(token, workspaceSlug, deviceId, fm.sourceField, checked);
+                                    mutateAnalytics();
+                                    toast.success(`${fm.displayLabel} set to ${checked ? "On" : "Off"}`);
+                                  } catch (err: any) {
+                                    toast.error(err.message || "Control failed");
+                                  }
+                                }}
+                              />
+                            </div>
+                          ) : fm.dataType === "number" && fm.min !== undefined && fm.max !== undefined ? (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between text-xs text-gray-500">
+                                <span>{fm.min}</span>
+                                <span className="font-medium text-gray-900 text-sm">
+                                  {typeof value === "number" ? value : "—"}
+                                </span>
+                                <span>{fm.max}</span>
+                              </div>
+                              <Slider
+                                value={[typeof value === "number" ? value : fm.min]}
+                                min={fm.min}
+                                max={fm.max}
+                                step={fm.precision ? Math.pow(10, -fm.precision) : 1}
+                                onValueCommit={async ([val]) => {
+                                  if (!token) return;
+                                  try {
+                                    await apiControlDeviceField(token, workspaceSlug, deviceId, fm.sourceField, val);
+                                    mutateAnalytics();
+                                    toast.success(`${fm.displayLabel} set to ${val}`);
+                                  } catch (err: any) {
+                                    toast.error(err.message || "Control failed");
+                                  }
+                                }}
+                              />
+                            </div>
+                          ) : fm.dataType === "string" ? (
+                            <Input
+                              defaultValue={typeof value === "string" ? value : ""}
+                              className="h-8 text-sm"
+                              onKeyDown={async (e) => {
+                                if (e.key === "Enter" && token) {
+                                  const val = (e.target as HTMLInputElement).value;
+                                  try {
+                                    await apiControlDeviceField(token, workspaceSlug, deviceId, fm.sourceField, val);
+                                    mutateAnalytics();
+                                    toast.success(`${fm.displayLabel} updated`);
+                                  } catch (err: any) {
+                                    toast.error(err.message || "Control failed");
+                                  }
+                                }
+                              }}
+                            />
+                          ) : (
+                            <span className="text-sm text-gray-700">{String(value ?? "—")}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Main Tabs */}
           <Tabs defaultValue="table" className="space-y-6">
@@ -1371,7 +1500,20 @@ export function DeviceAnalytics() {
                           </div>
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-gray-900">{deviceKeyInfo.name}</p>
-                            <p className="text-xs text-gray-500 font-mono">{deviceKeyInfo.keyPrefix}...</p>
+                            <p className="text-xs text-gray-500 font-mono inline-flex items-center gap-1">
+                              {deviceKeyInfo.keyPrefix}...
+                              <button
+                                className="text-gray-400 hover:text-gray-600 transition-colors"
+                                onClick={() => {
+                                  if (deviceKeyInfo.keyPrefix) {
+                                    navigator.clipboard.writeText(deviceKeyInfo.keyPrefix);
+                                    toast.success("Key prefix copied");
+                                  }
+                                }}
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                            </p>
                             {deviceKeyInfo.createdAt && (
                               <p className="text-xs text-gray-400 mt-0.5">
                                 Created {new Date(deviceKeyInfo.createdAt).toLocaleDateString()}
@@ -2026,6 +2168,32 @@ void loop() {
                 <Trash2 className="w-4 h-4 mr-2" />
               )}
               Revoke Key
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Device Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Device</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete <strong>{device.name}</strong>? All device data, analytics, and API keys will be permanently removed. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteDevice}
+              disabled={isDeleting}
+              className="gap-2"
+            >
+              {isDeleting && <Loader2 className="w-4 h-4 animate-spin" />}
+              Delete Device
             </Button>
           </DialogFooter>
         </DialogContent>
