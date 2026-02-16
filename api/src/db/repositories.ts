@@ -272,15 +272,17 @@ export class WorkspaceRepository extends BaseRepository<WorkspaceEntity> {
    */
   async getBySlug(slug: string): Promise<WorkspaceEntity | null> {
     const { pk, sk } = Keys.workspaceAlias(slug);
-    return get<WorkspaceEntity>(this.env, pk, sk);
+    const entity = await get<WorkspaceEntity>(this.env, pk, sk);
+    if (!entity || entity.deletedAt) return null;
+    return entity;
   }
 
   /**
    * Check if slug exists
    */
   async slugExists(slug: string): Promise<boolean> {
-    const { pk, sk } = Keys.workspaceAlias(slug);
-    return exists(this.env, pk, sk);
+    const entity = await this.getBySlug(slug);
+    return entity !== null;
   }
 
   /**

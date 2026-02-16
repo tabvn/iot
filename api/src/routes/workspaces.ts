@@ -51,6 +51,7 @@ const RESERVED_SLUGS = [
   'members',
   'automations',
   'notifications',
+  'security',
 ];
 
 interface WorkspaceEnv extends StorageEnv {

@@ -57,10 +57,17 @@ export function jsonError(error: string, status: number): Response {
   return json({ error }, status);
 }
 
+const ALLOWED_ORIGINS = [
+  "https://thebaycity.dev",
+  "https://www.thebaycity.dev",
+  "http://localhost:3000",
+  "http://localhost:8787",
+];
+
 const { preflight, corsify } = createCors({
-  origins: ["*"],
+  origins: (origin: string) => ALLOWED_ORIGINS.includes(origin),
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  headers: ["Content-Type", "Authorization"],
+  headers: ["Content-Type", "Authorization", "x-workspace-alias"],
 });
 
 const router: RouterType = Router();

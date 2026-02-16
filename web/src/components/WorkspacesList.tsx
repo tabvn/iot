@@ -51,6 +51,7 @@ const RESERVED_SLUGS = [
   "lib",
   "styles",
   "utils",
+  "security",
 ];
 
 const createWorkspaceSchema = z.object({

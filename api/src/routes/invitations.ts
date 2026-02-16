@@ -9,6 +9,7 @@ import type {
 } from '@/db/types';
 import { Timestamps } from '@/db/types';
 import { resolveWorkspace, type AuthEnv, requireRole, getAuthFromRequest } from '@/auth';
+import { hashPassword } from '@/password';
 import type { RouterType } from 'itty-router';
 import { sendEmail, invitationEmailHtml, invitationEmailText, type EmailEnv } from '@/email';
 import { notifyInvitationAccepted, notifyInvitationCreated, notifyInvitationDeclined } from '@/notifications';
@@ -340,10 +341,11 @@ export function invitationsRouter(router: RouterType) {
         .join('')
         .slice(0, 12);
 
+      const hashedPassword = await hashPassword(generatedPassword);
       user = await db.users.create({
         name: invitation.email.split('@')[0],
         email: invitation.email,
-        passwordHash: generatedPassword,
+        passwordHash: hashedPassword,
       });
 
       userId = user.userId;

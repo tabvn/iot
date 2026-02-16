@@ -2,19 +2,14 @@ import { createRepositories } from '@/db';
 import type { StorageEnv } from '@/db/storage';
 import type { UserEntity } from '@/db/types';
 import { getAuthFromRequest } from '@/auth';
+import { verifyPassword, hashPassword } from '@/password';
+import { checkAuthRateLimit } from '@/rate-limit';
 import type { RouterType } from 'itty-router';
 import {
   successResponse,
   badRequestResponse,
   unauthorizedResponse,
 } from '@/api-responses';
-
-// Simple password hash verification using Web Crypto
-async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  // For now we assume storedHash is a plain text password for demo.
-  // In production, this should be a salted hash (e.g. argon2/bcrypt) and verified accordingly.
-  return password === storedHash;
-}
 
 interface JwtEnv extends StorageEnv {
   USER_JWT_SECRET?: string;
@@ -60,6 +55,16 @@ async function signUserJwt(env: JwtEnv, user: UserEntity): Promise<string | null
 
 export function loginRouter(router: RouterType) {
   router.post('/login', async (request: Request, env: JwtEnv) => {
+    // Rate limit by IP
+    const ip = request.headers.get('cf-connecting-ip') || 'unknown';
+    const allowed = await checkAuthRateLimit(env, ip, 'login');
+    if (!allowed) {
+      return new Response(JSON.stringify({ error: 'Too many login attempts. Please try again later.' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+      });
+    }
+
     const body = (await request.json().catch(() => null)) as {
       email?: string;
       password?: string;
@@ -84,10 +89,16 @@ export function loginRouter(router: RouterType) {
       return unauthorizedResponse('Invalid credentials');
     }
 
-    // Verify password
+    // Verify password (supports both PBKDF2 and legacy plaintext)
     const ok = await verifyPassword(password, user.passwordHash ?? '');
     if (!ok) {
       return unauthorizedResponse('Invalid credentials');
+    }
+
+    // Auto-migrate plaintext passwords to PBKDF2 on successful login
+    if (user.passwordHash && !user.passwordHash.startsWith('pbkdf2:')) {
+      const hashed = await hashPassword(password);
+      await db.users.update(user.userId, { passwordHash: hashed });
     }
 
     // Create session

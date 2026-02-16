@@ -43,3 +43,34 @@ export async function checkRateLimit(env: StorageEnv, workspaceId: string, plan:
 export function getPlanLimits(plan: WorkspacePlan): PlanLimits {
   return PLAN_LIMITS[plan];
 }
+
+// IP-based rate limits for auth endpoints
+const AUTH_LIMITS: Record<string, number> = {
+  login: 10,  // 10 attempts per minute per IP
+  signup: 5,  // 5 attempts per minute per IP
+};
+
+// Simple IP-based rate limit for auth endpoints (login, signup)
+export async function checkAuthRateLimit(
+  env: StorageEnv,
+  ip: string,
+  action: 'login' | 'signup',
+): Promise<boolean> {
+  const limit = AUTH_LIMITS[action];
+  const prefix = env.TABLE_BUCKET_PREFIX || '';
+  const now = new Date();
+  const minuteKey = `${now.getUTCFullYear()}${now.getUTCMonth()}${now.getUTCDate()}${now.getUTCHours()}${now.getUTCMinutes()}`;
+  const key = `${prefix}RL#AUTH#${action}#${ip}#${minuteKey}`;
+
+  const obj = await env.DEVICE_DATA_BUCKET.get(key);
+  let count = 0;
+  if (obj) {
+    const text = await obj.text();
+    count = parseInt(text, 10) || 0;
+  }
+  if (count >= limit) {
+    return false;
+  }
+  await env.DEVICE_DATA_BUCKET.put(key, String(count + 1), { httpMetadata: { contentType: 'text/plain' } });
+  return true;
+}

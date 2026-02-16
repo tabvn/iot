@@ -2,6 +2,8 @@ import { createRepositories } from '@/db';
 import type { StorageEnv } from '@/db/storage';
 import type { RouterType } from 'itty-router';
 import { getAuthFromRequest } from '@/auth';
+import { hashPassword, verifyPassword } from '@/password';
+import { checkAuthRateLimit } from '@/rate-limit';
 import {
   successResponse,
   createdResponse,
@@ -25,6 +27,16 @@ interface UserEnv extends StorageEnv {
 export function usersRouter(router: RouterType) {
   // Create user via UserDurableObject to avoid duplicates
   router.post('/users', async (request: any, env: UserEnv) => {
+    // Rate limit by IP
+    const ip = (request as Request).headers.get('cf-connecting-ip') || 'unknown';
+    const allowed = await checkAuthRateLimit(env, ip, 'signup');
+    if (!allowed) {
+      return new Response(JSON.stringify({ error: 'Too many signup attempts. Please try again later.' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+      });
+    }
+
     const body = (await request.json().catch(() => null)) as {
       name?: string;
       email?: string;
@@ -44,6 +56,9 @@ export function usersRouter(router: RouterType) {
       return badRequestResponse('Invalid email format');
     }
 
+    // Hash password before storing
+    const hashedPassword = await hashPassword(body.passwordHash);
+
     const emailLower = body.email.toLowerCase();
     const id = env.USER_DO.idFromName(emailLower);
     const stub = env.USER_DO.get(id);
@@ -53,7 +68,7 @@ export function usersRouter(router: RouterType) {
     const res = await stub.fetch(url.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: body.name, email: body.email, passwordHash: body.passwordHash }),
+      body: JSON.stringify({ name: body.name, email: body.email, passwordHash: hashedPassword }),
     });
 
     return res;
@@ -144,11 +159,13 @@ export function usersRouter(router: RouterType) {
       return notFoundResponse('User not found');
     }
 
-    if (existing.passwordHash !== body.currentPassword) {
+    const passwordOk = await verifyPassword(body.currentPassword, existing.passwordHash ?? '');
+    if (!passwordOk) {
       return forbiddenResponse('Current password is incorrect');
     }
 
-    await db.users.update(auth.userId, { passwordHash: body.newPassword });
+    const hashedNewPassword = await hashPassword(body.newPassword);
+    await db.users.update(auth.userId, { passwordHash: hashedNewPassword });
 
     return successResponse({ ok: true });
   });
@@ -191,6 +208,12 @@ export function usersRouter(router: RouterType) {
       return notFoundResponse('User not found');
     }
 
+    // Hash password if being updated
+    let passwordToStore = body?.passwordHash;
+    if (passwordToStore) {
+      passwordToStore = await hashPassword(passwordToStore);
+    }
+
     // Handle via DO to ensure email uniqueness
     const email = body?.email ?? existing.email;
     const id = env.USER_DO.idFromName(email.toLowerCase());
@@ -205,7 +228,7 @@ export function usersRouter(router: RouterType) {
         userId,
         name: body?.name,
         email: body?.email,
-        passwordHash: body?.passwordHash,
+        passwordHash: passwordToStore,
         avatarUrl: body?.avatarUrl,
       }),
     });
