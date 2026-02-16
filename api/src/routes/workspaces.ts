@@ -1,5 +1,7 @@
 import { createRepositories } from '@/db';
 import type { StorageEnv } from '@/db/storage';
+import { queryByPkAndSkPrefix } from '@/db/storage';
+import type { DeviceEntity, AutomationEntity, WorkspaceMemberEntity } from '@/db/types';
 import { resolveWorkspace, requireRole, type AuthEnv, getAuthFromRequest } from '@/auth';
 import type { RouterType } from 'itty-router';
 import {
@@ -9,7 +11,9 @@ import {
   unauthorizedResponse,
   badRequestResponse,
   toApiWorkspace,
+  type WorkspaceStats,
 } from '@/api-responses';
+import { notifyWorkspaceUpdated } from '@/notifications';
 
 const RESERVED_SLUGS = [
   'home',
@@ -117,7 +121,7 @@ export function workspacesRouter(router: RouterType) {
   });
 
   // Update workspace
-  router.put('/workspace', async (request: any, env: AuthEnv & WorkspaceEnv) => {
+  router.put('/workspace', async (request: any, env: AuthEnv & WorkspaceEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -160,6 +164,21 @@ export function workspacesRouter(router: RouterType) {
         description: body?.description,
       }),
     });
+
+    if (res.ok) {
+      const updatedFields = [
+        body?.name && 'name',
+        body?.slug && 'slug',
+        body?.description !== undefined && 'description',
+      ].filter(Boolean) as string[];
+      if (updatedFields.length > 0) {
+        ctx.waitUntil(
+          notifyWorkspaceUpdated(env, workspaceId, updatedFields).catch((err) => {
+            console.error('[workspaces][notify][error]', err);
+          })
+        );
+      }
+    }
 
     return res;
   });
@@ -213,8 +232,26 @@ export function workspacesRouter(router: RouterType) {
     const db = createRepositories(env);
     const workspaces = await db.workspaces.getByUserId(userId);
 
+    // Fetch stats for each workspace in parallel
+    const workspacesWithStats = await Promise.all(
+      workspaces.map(async (ws) => {
+        const [devicesResult, automationsResult, membersResult] = await Promise.all([
+          queryByPkAndSkPrefix<DeviceEntity>(env, `WS#${ws.workspaceId}`, 'DEVICE#'),
+          queryByPkAndSkPrefix<AutomationEntity>(env, `WS#${ws.workspaceId}`, 'AUTO#'),
+          queryByPkAndSkPrefix<WorkspaceMemberEntity>(env, `WS#${ws.workspaceId}`, 'MEMBER#'),
+        ]);
+        const stats: WorkspaceStats = {
+          totalDevices: devicesResult.items.length,
+          onlineDevices: devicesResult.items.filter((d) => d.status === 'online').length,
+          totalAutomations: automationsResult.items.filter((a) => a.entityType === 'AUTOMATION').length,
+          totalMembers: membersResult.items.filter((m) => m.entityType === 'WORKSPACE').length,
+        };
+        return toApiWorkspace(ws, stats);
+      })
+    );
+
     return successResponse({
-      workspaces: workspaces.map(toApiWorkspace),
+      workspaces: workspacesWithStats,
     });
   });
 

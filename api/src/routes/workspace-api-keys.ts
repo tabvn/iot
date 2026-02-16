@@ -10,6 +10,7 @@ import {
   unauthorizedResponse,
   badRequestResponse,
 } from '@/api-responses';
+import { notifyApiKeyCreated, notifyApiKeyRevoked } from '@/notifications';
 
 interface CreateWorkspaceApiKeyRequest {
   name?: string;
@@ -17,7 +18,7 @@ interface CreateWorkspaceApiKeyRequest {
 
 export function workspaceApiKeysRouter(router: RouterType) {
   // Create a new API key for the current workspace
-  router.post('/workspace/api-keys', async (request: Request, env: StorageEnv & AuthEnv) => {
+  router.post('/workspace/api-keys', async (request: Request, env: StorageEnv & AuthEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request);
     if (!requireRole(resolved, 'owner')) {
       return unauthorizedResponse();
@@ -63,6 +64,12 @@ export function workspaceApiKeysRouter(router: RouterType) {
 
     await Promise.all([put(env, keyEntity), put(env, indexEntity)]);
 
+    ctx.waitUntil(
+      notifyApiKeyCreated(env, workspaceId, name, keyPrefix).catch((err) => {
+        console.error('[api-keys][notify][error]', err);
+      })
+    );
+
     // Return the raw key - this is the ONLY time the full key is shown
     return createdResponse({
       apiKeyId,
@@ -95,7 +102,7 @@ export function workspaceApiKeysRouter(router: RouterType) {
   });
 
   // Revoke an API key
-  router.delete('/workspace/api-keys/:apiKeyId', async (request: any, env: StorageEnv & AuthEnv) => {
+  router.delete('/workspace/api-keys/:apiKeyId', async (request: any, env: StorageEnv & AuthEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'owner')) {
       return unauthorizedResponse();
@@ -136,6 +143,12 @@ export function workspaceApiKeysRouter(router: RouterType) {
     }
 
     await Promise.all(promises);
+
+    ctx.waitUntil(
+      notifyApiKeyRevoked(env, workspaceId, existing.name, existing.keyPrefix).catch((err) => {
+        console.error('[api-keys][notify][error]', err);
+      })
+    );
 
     return successResponse({ ok: true });
   });

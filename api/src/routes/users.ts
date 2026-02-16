@@ -338,7 +338,7 @@ export function usersRouter(router: RouterType) {
     const db = createRepositories(env);
     const workspaces = await db.workspaces.getByUserId(userId);
     return successResponse({
-      workspaces: workspaces.map(toApiWorkspace),
+      workspaces: workspaces.map((ws) => toApiWorkspace(ws)),
     });
   });
 }

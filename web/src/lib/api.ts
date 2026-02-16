@@ -94,6 +94,13 @@ export async function apiChangePassword(
 // Workspace types & API
 // ============================================================================
 
+export interface WorkspaceStats {
+  totalDevices: number;
+  onlineDevices: number;
+  totalAutomations: number;
+  totalMembers: number;
+}
+
 export interface WorkspaceDetail {
   workspaceId: string;
   name: string;
@@ -103,6 +110,7 @@ export interface WorkspaceDetail {
   plan?: string;
   createdAt: string;
   updatedAt?: string;
+  stats?: WorkspaceStats;
 }
 
 export async function apiListWorkspaces(token: string, userId: string): Promise<{ workspaces: WorkspaceDetail[] }> {
@@ -921,14 +929,33 @@ export async function apiGetMyInvitations(token: string): Promise<{ invitations:
 // ============================================================================
 
 export type NotificationType =
+  // Device
+  | "device_created"
+  | "device_updated"
+  | "device_deleted"
+  | "device_online"
+  | "device_offline"
+  // Automation
+  | "automation_created"
+  | "automation_updated"
+  | "automation_deleted"
   | "automation_triggered"
   | "automation_failed"
   | "automation_partial_failure"
+  // Members
   | "member_joined"
   | "member_left"
+  | "member_role_changed"
+  // Invitations
+  | "invitation_created"
   | "invitation_accepted"
-  | "device_offline"
-  | "device_online"
+  | "invitation_declined"
+  // Workspace
+  | "workspace_updated"
+  // API Keys
+  | "api_key_created"
+  | "api_key_revoked"
+  // System
   | "system";
 
 export type NotificationSeverity = "info" | "warning" | "error" | "success";
@@ -955,11 +982,12 @@ export interface NotificationPreferences {
 export async function apiListNotifications(
   token: string,
   workspaceSlug: string,
-  params?: { unreadOnly?: boolean; limit?: number },
-): Promise<{ notifications: WorkspaceNotification[] }> {
+  params?: { unreadOnly?: boolean; limit?: number; cursor?: string },
+): Promise<{ notifications: WorkspaceNotification[]; hasMore: boolean; nextCursor?: string }> {
   const url = new URL(`${API_BASE}/notifications`, typeof window !== "undefined" ? window.location.origin : undefined);
   if (params?.unreadOnly) url.searchParams.set("unreadOnly", "true");
   if (params?.limit) url.searchParams.set("limit", String(params.limit));
+  if (params?.cursor) url.searchParams.set("cursor", params.cursor);
 
   const res = await fetch(url.toString(), {
     headers: authHeaders(token, workspaceSlug),

@@ -12,7 +12,7 @@ import {
   badRequestResponse,
   toApiAutomation,
 } from '@/api-responses';
-import { notifyWorkspaceActivity } from '@/notifications';
+import { notifyAutomationCreated, notifyAutomationUpdated, notifyAutomationDeleted } from '@/notifications';
 
 interface AutomationEnv extends StorageEnv {
   WORKSPACE_AUTOMATION_DO: DurableObjectNamespace;
@@ -39,7 +39,7 @@ interface UpdateAutomationBody {
 
 export function automationsRouter(router: RouterType) {
   // Create automation - requires manage access
-  router.post('/automations', async (request: any, env: AutomationEnv & AuthEnv) => {
+  router.post('/automations', async (request: any, env: AutomationEnv & AuthEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'editor')) {
       return unauthorizedResponse();
@@ -67,7 +67,11 @@ export function automationsRouter(router: RouterType) {
 
     await invalidateAutomationCache(env, workspaceId);
 
-    notifyWorkspaceActivity(env, workspaceId, `Automation "${body.name}" created`, `A new automation rule has been added to the workspace.`, { automationId: automation.automationId, automationName: body.name }).catch(() => {});
+    ctx.waitUntil(
+      notifyAutomationCreated(env, workspaceId, automation.automationId, body.name).catch((err) => {
+        console.error('[automations][notify][error]', err);
+      })
+    );
 
     return createdResponse(toApiAutomation(automation));
   });
@@ -108,7 +112,7 @@ export function automationsRouter(router: RouterType) {
   });
 
   // Update automation
-  router.put('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv) => {
+  router.put('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'editor')) {
       return unauthorizedResponse();
@@ -128,16 +132,18 @@ export function automationsRouter(router: RouterType) {
       return notFoundResponse('Automation not found');
     }
 
-    const updated = await db.automations.update(workspaceId, automationId, {
-      name: body.name,
-      description: body.description,
-      status: body.status,
-      triggerType: body.triggerType as any,
-      triggerConfig: body.triggerConfig,
-      conditionGroups: body.conditionGroups,
-      conditionLogic: body.conditionLogic,
-      actions: body.actions,
-    });
+    // Only include fields that were actually provided to avoid overwriting with undefined
+    const updates: Record<string, unknown> = {};
+    if (body.name !== undefined) updates.name = body.name;
+    if (body.description !== undefined) updates.description = body.description;
+    if (body.status !== undefined) updates.status = body.status;
+    if (body.triggerType !== undefined) updates.triggerType = body.triggerType;
+    if (body.triggerConfig !== undefined) updates.triggerConfig = body.triggerConfig;
+    if (body.conditionGroups !== undefined) updates.conditionGroups = body.conditionGroups;
+    if (body.conditionLogic !== undefined) updates.conditionLogic = body.conditionLogic;
+    if (body.actions !== undefined) updates.actions = body.actions;
+
+    const updated = await db.automations.update(workspaceId, automationId, updates);
 
     await invalidateAutomationCache(env, workspaceId);
 
@@ -145,13 +151,17 @@ export function automationsRouter(router: RouterType) {
       return notFoundResponse('Automation not found');
     }
 
-    notifyWorkspaceActivity(env, workspaceId, `Automation "${updated.name}" updated`, `Automation rule "${updated.name}" has been modified.`, { automationId, automationName: updated.name }).catch(() => {});
+    ctx.waitUntil(
+      notifyAutomationUpdated(env, workspaceId, automationId, updated.name).catch((err) => {
+        console.error('[automations][notify][error]', err);
+      })
+    );
 
     return successResponse(toApiAutomation(updated));
   });
 
   // Delete automation
-  router.delete('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv) => {
+  router.delete('/automations/:automationId', async (request: any, env: AutomationEnv & AuthEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -164,7 +174,11 @@ export function automationsRouter(router: RouterType) {
     await db.automations.delete(workspaceId, automationId);
     await invalidateAutomationCache(env, workspaceId);
 
-    notifyWorkspaceActivity(env, workspaceId, `Automation "${existing?.name || automationId}" deleted`, `An automation rule has been removed from the workspace.`, { automationId, automationName: existing?.name }).catch(() => {});
+    ctx.waitUntil(
+      notifyAutomationDeleted(env, workspaceId, automationId, existing?.name || automationId).catch((err) => {
+        console.error('[automations][notify][error]', err);
+      })
+    );
 
     return successResponse({ ok: true });
   });

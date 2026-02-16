@@ -14,6 +14,13 @@ export interface ApiUser {
   createdAt?: string;
 }
 
+export interface WorkspaceStats {
+  totalDevices: number;
+  onlineDevices: number;
+  totalAutomations: number;
+  totalMembers: number;
+}
+
 export interface ApiWorkspace {
   workspaceId: string;
   name: string;
@@ -23,6 +30,7 @@ export interface ApiWorkspace {
   plan?: string;
   createdAt: string;
   updatedAt?: string;
+  stats?: WorkspaceStats;
 }
 
 export interface ApiWorkspaceMember {
@@ -225,7 +233,7 @@ export function toApiUser(entity: UserEntity): ApiUser {
   };
 }
 
-export function toApiWorkspace(entity: WorkspaceEntity): ApiWorkspace {
+export function toApiWorkspace(entity: WorkspaceEntity, stats?: WorkspaceStats): ApiWorkspace {
   return {
     workspaceId: entity.workspaceId,
     name: entity.name,
@@ -235,6 +243,7 @@ export function toApiWorkspace(entity: WorkspaceEntity): ApiWorkspace {
     plan: entity.plan,
     createdAt: entity.createdAt,
     updatedAt: entity.updatedAt,
+    ...(stats ? { stats } : {}),
   };
 }
 

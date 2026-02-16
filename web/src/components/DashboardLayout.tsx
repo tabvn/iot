@@ -423,7 +423,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                     {/* Footer */}
                     <div className="border-t border-gray-100 px-4 py-2.5 bg-gray-50/50">
                       <Link
-                        href={`/${workspace}/settings/notifications`}
+                        href={`/${workspace}/notifications`}
                         onClick={() => setNotifOpen(false)}
                         className="text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors flex items-center justify-center gap-1"
                       >

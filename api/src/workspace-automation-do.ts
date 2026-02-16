@@ -1,6 +1,6 @@
 import type { DurableObjectState } from "@cloudflare/workers-types";
 import type { StorageEnv } from "@/db/storage";
-import { queryByPk } from "@/db/storage";
+import { queryByPkAndSkPrefix } from "@/db/storage";
 import type { AutomationEntity, ScheduleTriggerConfig, AutomationTriggerType } from "@/db/types";
 import {
   evaluateDeviceDataAutomations,
@@ -30,8 +30,8 @@ export class WorkspaceAutomationDO {
   }
 
   private async loadAutomations() {
-    const result = await queryByPk(this.env, `WS#${this.workspaceId}`);
-    this.automations = result.items.filter((e: any): e is AutomationEntity => e.entityType === "AUTOMATION");
+    const result = await queryByPkAndSkPrefix<AutomationEntity>(this.env, `WS#${this.workspaceId}`, 'AUTO#');
+    this.automations = result.items.filter((e): e is AutomationEntity => e.entityType === "AUTOMATION");
     this.loaded = true;
 
     const warnings = validateAutomationGraph(this.automations);

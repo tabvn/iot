@@ -324,12 +324,12 @@ export function AutomationForm({ workspaceSlug, mode, automationId, initialData 
       // Collect all device IDs that need to be fetched
       const deviceIds = new Set<string>();
 
-      if (initialData.triggerConfig.type === "device_data" || initialData.triggerConfig.type === "device_status") {
+      if (initialData.triggerConfig?.type === "device_data" || initialData.triggerConfig?.type === "device_status") {
         const config = initialData.triggerConfig as DeviceDataTriggerConfig | DeviceStatusTriggerConfig;
         if (config.deviceId) deviceIds.add(config.deviceId);
       }
 
-      for (const action of initialData.actions) {
+      for (const action of initialData.actions ?? []) {
         if (action.type === "update_device" && action.targetDeviceId) {
           deviceIds.add(action.targetDeviceId);
         }

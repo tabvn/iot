@@ -1,5 +1,5 @@
 import type { StorageEnv } from '@/db/storage';
-import { queryByPk, get } from '@/db/storage';
+import { queryByPkAndSkPrefix, get } from '@/db/storage';
 import type { AutomationStatsEntity } from '@/db/types';
 import { resolveWorkspace, type AuthEnv } from '@/auth';
 import type { RouterType } from 'itty-router';
@@ -42,10 +42,8 @@ export function automationStatsRouter(router: RouterType) {
     }
     const { workspaceId } = resolved;
 
-    const result = await queryByPk(env, `WS#${workspaceId}`);
-    const statsItems = result.items.filter((e) =>
-      e.sk?.startsWith('AUTO_STATS#')
-    ) as AutomationStatsEntity[];
+    const result = await queryByPkAndSkPrefix<AutomationStatsEntity>(env, `WS#${workspaceId}`, 'AUTO_STATS#');
+    const statsItems = result.items;
 
     const stats = statsItems.map((s) => formatStats(s, s.automationId));
 

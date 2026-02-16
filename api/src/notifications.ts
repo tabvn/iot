@@ -1,5 +1,5 @@
 import type { StorageEnv } from '@/db/storage';
-import { put, queryByPk, get } from '@/db/storage';
+import { put, queryByPkAndSkPrefix, get } from '@/db/storage';
 import type {
   WorkspaceMemberEntity,
   UserNotificationEntity,
@@ -22,35 +22,59 @@ interface NotificationPayload {
 }
 
 const ROLE_VISIBILITY: Record<NotificationType, MemberRole[]> = {
+  // Device
+  device_created: ['owner', 'admin', 'editor'],
+  device_updated: ['owner', 'admin', 'editor'],
+  device_deleted: ['owner', 'admin'],
+  device_online: ['owner', 'admin', 'editor', 'viewer'],
+  device_offline: ['owner', 'admin', 'editor', 'viewer'],
+  // Automation
+  automation_created: ['owner', 'admin', 'editor'],
+  automation_updated: ['owner', 'admin', 'editor'],
+  automation_deleted: ['owner', 'admin'],
   automation_triggered: ['owner', 'admin', 'editor'],
   automation_failed: ['owner', 'admin'],
   automation_partial_failure: ['owner', 'admin'],
+  // Members
   member_joined: ['owner', 'admin'],
   member_left: ['owner', 'admin'],
+  member_role_changed: ['owner', 'admin'],
+  // Invitations
+  invitation_created: ['owner', 'admin'],
   invitation_accepted: ['owner', 'admin'],
-  device_offline: ['owner', 'admin', 'editor', 'viewer'],
-  device_online: ['owner', 'admin', 'editor', 'viewer'],
+  invitation_declined: ['owner', 'admin'],
+  // Workspace
+  workspace_updated: ['owner', 'admin', 'editor', 'viewer'],
+  // API Keys
+  api_key_created: ['owner', 'admin'],
+  api_key_revoked: ['owner', 'admin'],
+  // System
   system: ['owner', 'admin', 'editor', 'viewer'],
 };
 
 export async function dispatchNotification(
   env: StorageEnv,
-  payload: NotificationPayload
+  payload: NotificationPayload,
+  options?: { excludeUserId?: string }
 ): Promise<void> {
   const { workspaceId, type, severity, title, message, metadata } = payload;
   const now = new Date().toISOString();
   const notificationId = crypto.randomUUID();
 
-  const wsResult = await queryByPk(env, `WS#${workspaceId}`);
+  const wsResult = await queryByPkAndSkPrefix<WorkspaceMemberEntity>(env, `WS#${workspaceId}`, 'MEMBER#');
   const members = wsResult.items.filter(
-    (e): e is WorkspaceMemberEntity => e.sk?.startsWith('MEMBER#') === true && e.entityType === 'WORKSPACE'
+    (e): e is WorkspaceMemberEntity => e.entityType === 'WORKSPACE'
   );
+
+  console.log(`[notifications][dispatch] type=${type} workspaceId=${workspaceId} members=${members.length}`);
 
   const eligibleRoles = ROLE_VISIBILITY[type] ?? ['owner', 'admin'];
 
   const writes: Promise<void>[] = [];
   for (const member of members) {
     if (!eligibleRoles.includes(member.role)) continue;
+    if (options?.excludeUserId && member.userId === options.excludeUserId) continue;
+    console.log(`[notifications][dispatch] writing notification for userId=${member.userId} role=${member.role}`);
 
     // Check user preferences
     const prefs = await get<UserNotificationPreferencesEntity>(
@@ -225,5 +249,271 @@ export async function notifyWorkspaceActivity(
     title,
     message,
     metadata,
+  });
+}
+
+// ============================================================================
+// Targeted Notification (single user, bypasses role fan-out)
+// ============================================================================
+
+export async function dispatchTargetedNotification(
+  env: StorageEnv,
+  payload: NotificationPayload & { targetUserId: string }
+): Promise<void> {
+  const { workspaceId, type, severity, title, message, metadata, targetUserId } = payload;
+  const now = new Date().toISOString();
+  const notificationId = crypto.randomUUID();
+
+  const prefs = await get<UserNotificationPreferencesEntity>(
+    env,
+    `USER_NOTIF_PREFS#${targetUserId}`,
+    `WS#${workspaceId}`
+  );
+  if (prefs?.disabledTypes?.includes(type)) return;
+
+  const entity: UserNotificationEntity = {
+    pk: `USER_NOTIF#${targetUserId}#${workspaceId}`,
+    sk: `${now}#${notificationId}`,
+    entityType: EntityTypes.NOTIFICATION,
+    createdAt: now,
+    updatedAt: now,
+    notificationId,
+    workspaceId,
+    userId: targetUserId,
+    type,
+    severity,
+    title,
+    message,
+    metadata,
+    read: false,
+  };
+  await put(env, entity);
+}
+
+// ============================================================================
+// Device CRUD Notifications
+// ============================================================================
+
+export async function notifyDeviceCreated(
+  env: StorageEnv,
+  workspaceId: string,
+  deviceId: string,
+  deviceName: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'device_created',
+    severity: 'info',
+    title: `Device "${deviceName}" created`,
+    message: `A new device has been added to the workspace.`,
+    metadata: { deviceId, deviceName },
+  });
+}
+
+export async function notifyDeviceUpdated(
+  env: StorageEnv,
+  workspaceId: string,
+  deviceId: string,
+  deviceName: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'device_updated',
+    severity: 'info',
+    title: `Device "${deviceName}" updated`,
+    message: `Device "${deviceName}" settings have been modified.`,
+    metadata: { deviceId, deviceName },
+  });
+}
+
+export async function notifyDeviceDeleted(
+  env: StorageEnv,
+  workspaceId: string,
+  deviceId: string,
+  deviceName: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'device_deleted',
+    severity: 'warning',
+    title: `Device "${deviceName}" deleted`,
+    message: `Device "${deviceName}" has been removed from the workspace.`,
+    metadata: { deviceId, deviceName },
+  });
+}
+
+// ============================================================================
+// Automation CRUD Notifications
+// ============================================================================
+
+export async function notifyAutomationCreated(
+  env: StorageEnv,
+  workspaceId: string,
+  automationId: string,
+  automationName: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'automation_created',
+    severity: 'info',
+    title: `Automation "${automationName}" created`,
+    message: `A new automation rule has been added to the workspace.`,
+    metadata: { automationId, automationName },
+  });
+}
+
+export async function notifyAutomationUpdated(
+  env: StorageEnv,
+  workspaceId: string,
+  automationId: string,
+  automationName: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'automation_updated',
+    severity: 'info',
+    title: `Automation "${automationName}" updated`,
+    message: `Automation rule "${automationName}" has been modified.`,
+    metadata: { automationId, automationName },
+  });
+}
+
+export async function notifyAutomationDeleted(
+  env: StorageEnv,
+  workspaceId: string,
+  automationId: string,
+  automationName: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'automation_deleted',
+    severity: 'warning',
+    title: `Automation "${automationName}" deleted`,
+    message: `Automation rule "${automationName}" has been removed.`,
+    metadata: { automationId, automationName },
+  });
+}
+
+// ============================================================================
+// Member Role Changed (dual dispatch: broadcast + targeted)
+// ============================================================================
+
+export async function notifyMemberRoleChanged(
+  env: StorageEnv,
+  workspaceId: string,
+  targetUserId: string,
+  userName: string,
+  oldRole: MemberRole,
+  newRole: MemberRole
+): Promise<void> {
+  // Broadcast to admins/owners, excluding the affected user to avoid duplicate
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'member_role_changed',
+    severity: 'info',
+    title: `${userName}'s role changed to ${newRole}`,
+    message: `${userName} was changed from ${oldRole} to ${newRole}.`,
+    metadata: { userId: targetUserId, userName, oldRole, newRole },
+  }, { excludeUserId: targetUserId });
+
+  // Directly notify the affected user
+  await dispatchTargetedNotification(env, {
+    workspaceId,
+    type: 'member_role_changed',
+    severity: 'info',
+    targetUserId,
+    title: `Your role has been changed to ${newRole}`,
+    message: `Your workspace role was updated from ${oldRole} to ${newRole}.`,
+    metadata: { oldRole, newRole },
+  });
+}
+
+// ============================================================================
+// Invitation Notifications
+// ============================================================================
+
+export async function notifyInvitationCreated(
+  env: StorageEnv,
+  workspaceId: string,
+  email: string,
+  role: MemberRole
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'invitation_created',
+    severity: 'info',
+    title: `Invitation sent to ${email}`,
+    message: `${email} was invited as ${role}.`,
+    metadata: { email, role },
+  });
+}
+
+export async function notifyInvitationDeclined(
+  env: StorageEnv,
+  workspaceId: string,
+  email: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'invitation_declined',
+    severity: 'info',
+    title: `Invitation to ${email} was declined`,
+    message: `${email} declined the workspace invitation.`,
+    metadata: { email },
+  });
+}
+
+// ============================================================================
+// Workspace Updated
+// ============================================================================
+
+export async function notifyWorkspaceUpdated(
+  env: StorageEnv,
+  workspaceId: string,
+  updatedFields: string[]
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'workspace_updated',
+    severity: 'info',
+    title: `Workspace settings updated`,
+    message: `The following settings were changed: ${updatedFields.join(', ')}.`,
+    metadata: { updatedFields },
+  });
+}
+
+// ============================================================================
+// API Key Notifications
+// ============================================================================
+
+export async function notifyApiKeyCreated(
+  env: StorageEnv,
+  workspaceId: string,
+  keyName: string,
+  keyPrefix: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'api_key_created',
+    severity: 'info',
+    title: `API key "${keyName}" created`,
+    message: `A new workspace API key (${keyPrefix}...) has been created.`,
+    metadata: { keyName, keyPrefix },
+  });
+}
+
+export async function notifyApiKeyRevoked(
+  env: StorageEnv,
+  workspaceId: string,
+  keyName: string,
+  keyPrefix: string
+): Promise<void> {
+  await dispatchNotification(env, {
+    workspaceId,
+    type: 'api_key_revoked',
+    severity: 'warning',
+    title: `API key "${keyName}" revoked`,
+    message: `Workspace API key (${keyPrefix}...) has been revoked.`,
+    metadata: { keyName, keyPrefix },
   });
 }

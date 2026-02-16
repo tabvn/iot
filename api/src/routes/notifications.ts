@@ -1,6 +1,7 @@
 import { createRepositories } from "@/db";
 import type { StorageEnv } from "@/db/storage";
 import { put, get, queryByPk } from "@/db/storage";
+// Note: queryByPk is needed for mark-read (SK includes unknown timestamp)
 import type {
   UserNotificationEntity,
   UserNotificationPreferencesEntity,
@@ -17,14 +18,26 @@ import {
 } from "@/api-responses";
 
 const VALID_NOTIFICATION_TYPES: NotificationType[] = [
+  "device_created",
+  "device_updated",
+  "device_deleted",
+  "device_online",
+  "device_offline",
+  "automation_created",
+  "automation_updated",
+  "automation_deleted",
   "automation_triggered",
   "automation_failed",
   "automation_partial_failure",
   "member_joined",
   "member_left",
+  "member_role_changed",
+  "invitation_created",
   "invitation_accepted",
-  "device_offline",
-  "device_online",
+  "invitation_declined",
+  "workspace_updated",
+  "api_key_created",
+  "api_key_revoked",
   "system",
 ];
 
@@ -44,24 +57,40 @@ export function notificationsRouter(router: RouterType) {
 
       const url = new URL(request.url);
       const unreadOnly = url.searchParams.get("unreadOnly") === "true";
+      const cursor = url.searchParams.get("cursor") || undefined;
       const limit = Math.min(
-        parseInt(url.searchParams.get("limit") || "50", 10),
+        parseInt(url.searchParams.get("limit") || "20", 10),
         200
       );
 
       const db = createRepositories(env);
+      // Fetch a larger batch to support cursor-based pagination in-memory
       const result = await db.notifications.getAll(auth.userId, workspaceId, {
-        limit: unreadOnly ? undefined : limit,
+        limit: 500,
         sortOrder: "desc",
       });
 
-      let notifications = result.items;
+      let allItems = result.items;
       if (unreadOnly) {
-        notifications = notifications.filter((n) => !n.read).slice(0, limit);
+        allItems = allItems.filter((n) => !n.read);
       }
 
+      // If cursor provided, skip items up to and including the cursor
+      let startIndex = 0;
+      if (cursor) {
+        const cursorIndex = allItems.findIndex((n) => n.sk === cursor);
+        if (cursorIndex !== -1) {
+          startIndex = cursorIndex + 1;
+        }
+      }
+
+      const page = allItems.slice(startIndex, startIndex + limit);
+      const hasMore = startIndex + limit < allItems.length;
+
       return successResponse({
-        notifications: notifications.map(toApiNotification),
+        notifications: page.map(toApiNotification),
+        hasMore,
+        nextCursor: hasMore ? page[page.length - 1]?.sk : undefined,
       });
     }
   );
@@ -101,10 +130,11 @@ export function notificationsRouter(router: RouterType) {
 
       const { notificationId } = request.params;
 
-      // Find the notification
+      // Find the notification (scan capped at 200 most recent)
       const result = await queryByPk<UserNotificationEntity>(
         env,
-        `USER_NOTIF#${auth.userId}#${workspaceId}`
+        `USER_NOTIF#${auth.userId}#${workspaceId}`,
+        { sortOrder: 'desc', limit: 200 }
       );
       const notif = result.items.find((n) => n.notificationId === notificationId);
 

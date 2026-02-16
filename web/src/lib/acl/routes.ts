@@ -117,7 +117,7 @@ export const WORKSPACE_ROUTES: RouteConfig[] = [
     permission: 'api_keys:view',
   },
   {
-    pattern: '/:workspace/settings/notifications',
+    pattern: '/:workspace/notifications',
     permission: 'notifications:manage_settings',
   },
   {

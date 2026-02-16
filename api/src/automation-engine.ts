@@ -1,5 +1,5 @@
 import type { StorageEnv } from '@/db/storage';
-import { get, put, queryByPk } from '@/db/storage';
+import { get, put } from '@/db/storage';
 import type {
   AutomationEntity,
   AutomationConditionGroup,
@@ -165,8 +165,7 @@ export async function executeActions(
   let workspaceName = workspaceId;
   let automationName = context.automationId || "Automation";
   try {
-    const result = await queryByPk(env, `WS#${workspaceId}`);
-    const wsMeta = result.items.find((e: any) => e.sk === "METADATA") as WorkspaceEntity | undefined;
+    const wsMeta = await get<WorkspaceEntity>(env, `WS#${workspaceId}`, 'METADATA');
     if (wsMeta) workspaceName = wsMeta.name;
   } catch {
     // Use workspaceId as fallback
@@ -278,8 +277,7 @@ export async function executeActionsWithLogging(
   let workspaceName = workspaceId;
   const automationName = context.automationId || "Automation";
   try {
-    const result = await queryByPk(env, `WS#${workspaceId}`);
-    const wsMeta = result.items.find((e: any) => e.sk === "METADATA") as WorkspaceEntity | undefined;
+    const wsMeta = await get<WorkspaceEntity>(env, `WS#${workspaceId}`, 'METADATA');
     if (wsMeta) workspaceName = wsMeta.name;
   } catch {
     // Use workspaceId as fallback

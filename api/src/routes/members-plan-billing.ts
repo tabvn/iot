@@ -3,7 +3,7 @@ import type { StorageEnv } from '@/db/storage';
 import type { MemberRole, DevicePermission } from '@/db/types';
 import { resolveWorkspace, type AuthEnv, requireRole } from '@/auth';
 import type { RouterType } from 'itty-router';
-import { notifyMemberJoined, notifyMemberLeft } from '@/notifications';
+import { notifyMemberJoined, notifyMemberLeft, notifyMemberRoleChanged } from '@/notifications';
 import {
   jsonResponse,
   successResponse,
@@ -64,7 +64,7 @@ export function membersPlanBillingRouter(router: RouterType) {
   });
 
   // Add workspace member (manage access required)
-  router.post('/members', async (request: any, env: AuthEnv & StorageEnv) => {
+  router.post('/members', async (request: any, env: AuthEnv & StorageEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -100,9 +100,11 @@ export function membersPlanBillingRouter(router: RouterType) {
     });
 
     // Dispatch notification
-    notifyMemberJoined(env, workspaceId, user.name || body.userId).catch((err) => {
-      console.error('[members][notify][error]', err);
-    });
+    ctx.waitUntil(
+      notifyMemberJoined(env, workspaceId, user.name || body.userId).catch((err) => {
+        console.error('[members][notify][error]', err);
+      })
+    );
 
     return createdResponse({
       member: toApiMember(member, user),
@@ -110,7 +112,7 @@ export function membersPlanBillingRouter(router: RouterType) {
   });
 
   // Update member (manage access required)
-  router.put('/members/:userId', async (request: any, env: AuthEnv & StorageEnv) => {
+  router.put('/members/:userId', async (request: any, env: AuthEnv & StorageEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -152,13 +154,23 @@ export function membersPlanBillingRouter(router: RouterType) {
     }
 
     const user = await db.users.getById(userId);
+
+    // Notify if role changed
+    if (body.role && body.role !== existing.role) {
+      ctx.waitUntil(
+        notifyMemberRoleChanged(env, workspaceId, userId, user?.name || userId, existing.role, body.role).catch((err) => {
+          console.error('[members][notify][error]', err);
+        })
+      );
+    }
+
     return successResponse({
       member: toApiMember(updated, user),
     });
   });
 
   // Remove member (manage access required)
-  router.delete('/members/:userId', async (request: any, env: AuthEnv & StorageEnv) => {
+  router.delete('/members/:userId', async (request: any, env: AuthEnv & StorageEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -172,9 +184,11 @@ export function membersPlanBillingRouter(router: RouterType) {
     const user = await db.users.getById(userId);
     await db.members.remove(workspaceId, userId);
 
-    notifyMemberLeft(env, workspaceId, user?.name || userId).catch((err) => {
-      console.error('[members][notify][error]', err);
-    });
+    ctx.waitUntil(
+      notifyMemberLeft(env, workspaceId, user?.name || userId).catch((err) => {
+        console.error('[members][notify][error]', err);
+      })
+    );
 
     return successResponse({ ok: true });
   });

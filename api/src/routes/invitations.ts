@@ -11,7 +11,7 @@ import { Timestamps } from '@/db/types';
 import { resolveWorkspace, type AuthEnv, requireRole, getAuthFromRequest } from '@/auth';
 import type { RouterType } from 'itty-router';
 import { sendEmail, invitationEmailHtml, invitationEmailText, type EmailEnv } from '@/email';
-import { notifyInvitationAccepted } from '@/notifications';
+import { notifyInvitationAccepted, notifyInvitationCreated, notifyInvitationDeclined } from '@/notifications';
 import {
   successResponse,
   createdResponse,
@@ -98,7 +98,7 @@ function validateCreateInvitationPayload(
 
 export function invitationsRouter(router: RouterType) {
   // Create a new invitation
-  router.post('/invitations', async (request: Request, env: InvitationEnv) => {
+  router.post('/invitations', async (request: Request, env: InvitationEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -195,6 +195,12 @@ export function invitationsRouter(router: RouterType) {
       console.error('[invitations][send_email][error]', emailResult.error);
     }
 
+    ctx.waitUntil(
+      notifyInvitationCreated(env, workspaceId, email, role).catch((err) => {
+        console.error('[invitations][notify][error]', err);
+      })
+    );
+
     return createdResponse({
       invitationId: invitation.invitationId,
       token: invitation.token,
@@ -256,7 +262,7 @@ export function invitationsRouter(router: RouterType) {
   });
 
   // Accept invitation
-  router.post('/invitations/accept/:token', async (request: any, env: InvitationEnv) => {
+  router.post('/invitations/accept/:token', async (request: any, env: InvitationEnv, ctx: ExecutionContext) => {
     const auth = await getAuthFromRequest(env, request as Request);
     const { token } = request.params;
 
@@ -368,9 +374,11 @@ export function invitationsRouter(router: RouterType) {
 
     // Dispatch notification
     if (user) {
-      notifyInvitationAccepted(env, invitation.workspaceId, invitation.email, user.name).catch((err) => {
-        console.error('[invitations][notify][error]', err);
-      });
+      ctx.waitUntil(
+        notifyInvitationAccepted(env, invitation.workspaceId, invitation.email, user.name).catch((err) => {
+          console.error('[invitations][notify][error]', err);
+        })
+      );
     }
 
     // For auto-created users, generate a session + JWT
@@ -394,7 +402,7 @@ export function invitationsRouter(router: RouterType) {
   });
 
   // Decline invitation
-  router.post('/invitations/decline/:token', async (request: any, env: InvitationEnv) => {
+  router.post('/invitations/decline/:token', async (request: any, env: InvitationEnv, ctx: ExecutionContext) => {
     const { token } = request.params;
 
     const db = createRepositories(env);
@@ -409,6 +417,12 @@ export function invitationsRouter(router: RouterType) {
     }
 
     await db.invitations.updateStatus(invitation.workspaceId, invitation.invitationId, 'declined');
+
+    ctx.waitUntil(
+      notifyInvitationDeclined(env, invitation.workspaceId, invitation.email).catch((err) => {
+        console.error('[invitations][notify][error]', err);
+      })
+    );
 
     return successResponse({ ok: true });
   });

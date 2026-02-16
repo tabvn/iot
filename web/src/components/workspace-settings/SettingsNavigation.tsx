@@ -16,7 +16,6 @@ import {
   CreditCard,
   Key,
   AlertTriangle,
-  Bell,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useACL, type Permission } from '@/lib/acl';
@@ -40,7 +39,6 @@ const settingsNavItems: SettingsNavItem[] = [
   { id: 'members', label: 'Members', href: '/members', icon: Users, permission: 'members:view' },
   { id: 'billing', label: 'Plan & Billing', href: '/plan', icon: CreditCard, permission: 'workspace:manage_billing', ownerOnly: true },
   { id: 'api', label: 'API Integration', href: '/api', icon: Key, permission: 'api_keys:view' },
-  { id: 'notifications', label: 'Notifications', href: '/notifications', icon: Bell, permission: 'notifications:manage_settings' },
   { id: 'advanced', label: 'Advanced', href: '/advanced', icon: AlertTriangle, permission: 'workspace:manage_settings' },
 ];
 

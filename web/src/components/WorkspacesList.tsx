@@ -193,8 +193,8 @@ export function WorkspacesList() {
     }
   };
 
-  const totalDevices = 0;
-  const onlineDevices = 0;
+  const totalDevices = workspaces.reduce((sum, ws) => sum + (ws.stats?.totalDevices ?? 0), 0);
+  const onlineDevices = workspaces.reduce((sum, ws) => sum + (ws.stats?.onlineDevices ?? 0), 0);
 
   return (
     <div className="space-y-8">
@@ -384,8 +384,13 @@ export function WorkspacesList() {
                 <CardContent className="relative space-y-4">
                   <div className="flex items-center gap-2">
                     <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-0 px-3 py-1">
-                      0 Devices
+                      {workspace.stats?.totalDevices ?? 0} Devices
                     </Badge>
+                    {(workspace.stats?.onlineDevices ?? 0) > 0 && (
+                      <Badge variant="secondary" className="bg-green-100 text-green-700 border-0 px-3 py-1">
+                        {workspace.stats?.onlineDevices} Online
+                      </Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-500">
                     <Calendar className="w-4 h-4" />

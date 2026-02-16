@@ -1,6 +1,8 @@
 import { Router, type RouterType, createCors } from "itty-router";
 import type { StorageEnv } from "@/db/storage";
-import { queryByPk } from "@/db/storage";
+import { queryByPk, get, put } from "@/db/storage";
+import type { WorkspaceEntity } from "@/db/types";
+import { EntityTypes } from "@/db/types";
 import { usersRouter } from "@/routes/users";
 import { workspacesRouter } from "@/routes/workspaces";
 import { devicesRouter } from "@/routes/devices";
@@ -235,9 +237,61 @@ invitationsRouter(router);
 
 async function listAllWorkspaceIds(env: Env): Promise<string[]> {
   const result = await queryByPk(env, "WORKSPACES#ALL");
-  return result.items
+  const ids = result.items
     .filter((r: any) => !("deletedAt" in r))
     .map((r: any) => (r as { workspaceId: string }).workspaceId);
+
+  if (ids.length > 0) return ids;
+
+  // Backfill: scan R2 for workspace PKs using delimiter to find all WS#<uuid>/ prefixes
+  const prefix = env.TABLE_BUCKET_PREFIX || "data/";
+  const scanPrefix = `${prefix}WS#`;
+  const foundIds: string[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const list = await env.DEVICE_DATA_BUCKET.list({
+      prefix: scanPrefix,
+      delimiter: "/",
+      cursor,
+    });
+
+    for (const dp of list.delimitedPrefixes) {
+      // dp = "data/WS#<uuid>/" — extract the uuid
+      const pkPart = dp.slice(prefix.length, -1); // "WS#<uuid>"
+      const wsId = pkPart.slice(3); // "<uuid>"
+      if (wsId && !wsId.includes("#")) {
+        foundIds.push(wsId);
+      }
+    }
+
+    cursor = list.truncated ? list.cursor : undefined;
+  } while (cursor);
+
+  // Backfill WORKSPACES#ALL index for each found workspace
+  if (foundIds.length > 0) {
+    await Promise.all(
+      foundIds.map(async (wsId) => {
+        const ws = await get<WorkspaceEntity>(env, `WS#${wsId}`, "METADATA");
+        if (ws && !ws.deletedAt) {
+          const now = new Date().toISOString();
+          await put(env, {
+            pk: "WORKSPACES#ALL",
+            sk: `WS#${wsId}`,
+            entityType: EntityTypes.WORKSPACE,
+            createdAt: ws.createdAt,
+            updatedAt: now,
+            workspaceId: wsId,
+            ownerUserId: ws.ownerUserId,
+            name: ws.name,
+            slug: ws.slug,
+          } as WorkspaceEntity);
+        }
+      })
+    );
+  }
+
+  return foundIds;
 }
 
 export default {

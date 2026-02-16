@@ -439,14 +439,33 @@ export interface AutomationStatsEntity extends BaseEntity {
 // ============================================================================
 
 export type NotificationType =
+  // Device
+  | 'device_created'
+  | 'device_updated'
+  | 'device_deleted'
+  | 'device_online'
+  | 'device_offline'
+  // Automation
+  | 'automation_created'
+  | 'automation_updated'
+  | 'automation_deleted'
   | 'automation_triggered'
   | 'automation_failed'
   | 'automation_partial_failure'
+  // Members
   | 'member_joined'
   | 'member_left'
+  | 'member_role_changed'
+  // Invitations
+  | 'invitation_created'
   | 'invitation_accepted'
-  | 'device_offline'
-  | 'device_online'
+  | 'invitation_declined'
+  // Workspace
+  | 'workspace_updated'
+  // API Keys
+  | 'api_key_created'
+  | 'api_key_revoked'
+  // System
   | 'system';
 
 export type NotificationSeverity = 'info' | 'warning' | 'error' | 'success';

@@ -167,11 +167,26 @@ export class WorkspaceDurableObject {
         devicePermissions: {},
       };
 
+      // Global workspace index (for scheduled automation ticks)
+      const globalIndex: WorkspaceEntity = {
+        pk: 'WORKSPACES#ALL',
+        sk: `WS#${workspaceId}`,
+        entityType: EntityTypes.WORKSPACE,
+        createdAt: now,
+        updatedAt: now,
+        workspaceId,
+        ownerUserId: body.ownerUserId,
+        name: body.name,
+        slug: slugLower,
+        description: body.description,
+      };
+
       await Promise.all([
         put(this.env, workspace),
         put(this.env, userWorkspaceIndex),
         put(this.env, aliasEntity),
         put(this.env, workspaceMember),
+        put(this.env, globalIndex),
       ]);
 
       return createdResponse({
@@ -302,10 +317,25 @@ export class WorkspaceDurableObject {
         deletedAt: now,
       };
 
+      // Soft-delete global workspace index entry
+      const globalIndexDeleted = {
+        pk: 'WORKSPACES#ALL',
+        sk: `WS#${body.workspaceId}`,
+        entityType: EntityTypes.WORKSPACE,
+        createdAt: existing.createdAt,
+        updatedAt: now,
+        deletedAt: now,
+        workspaceId: body.workspaceId,
+        ownerUserId: existing.ownerUserId,
+        name: existing.name,
+        slug: slugLower,
+      };
+
       await Promise.all([
         put(this.env, deleted),
         put(this.env, aliasDeleted),
         put(this.env, userWorkspaceDeleted as any),
+        put(this.env, globalIndexDeleted as any),
       ]);
 
       return successResponse({ ok: true });

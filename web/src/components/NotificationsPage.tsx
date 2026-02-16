@@ -1,15 +1,14 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import useSWR, { mutate } from "swr";
-import { useState } from "react";
+import useSWR from "swr";
+import { useState, useCallback, useEffect } from "react";
 import {
   Bell,
   Check,
   CheckCheck,
   Settings2,
   Loader2,
-  AlertCircle,
   ArrowLeft,
   Info,
   AlertTriangle,
@@ -44,27 +43,61 @@ import {
 // ---- Helpers ----
 
 const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
+  // Device
+  device_created: "Device Created",
+  device_updated: "Device Updated",
+  device_deleted: "Device Deleted",
+  device_online: "Device Online",
+  device_offline: "Device Offline",
+  // Automation
+  automation_created: "Automation Created",
+  automation_updated: "Automation Updated",
+  automation_deleted: "Automation Deleted",
   automation_triggered: "Automation Triggered",
   automation_failed: "Automation Failed",
   automation_partial_failure: "Automation Partial Failure",
+  // Members
   member_joined: "Member Joined",
   member_left: "Member Left",
+  member_role_changed: "Member Role Changed",
+  // Invitations
+  invitation_created: "Invitation Sent",
   invitation_accepted: "Invitation Accepted",
-  device_offline: "Device Offline",
-  device_online: "Device Online",
+  invitation_declined: "Invitation Declined",
+  // Workspace
+  workspace_updated: "Workspace Updated",
+  // API Keys
+  api_key_created: "API Key Created",
+  api_key_revoked: "API Key Revoked",
+  // System
   system: "System",
 };
 
-const ALL_NOTIFICATION_TYPES: NotificationType[] = [
-  "automation_triggered",
-  "automation_failed",
-  "automation_partial_failure",
-  "member_joined",
-  "member_left",
-  "invitation_accepted",
-  "device_offline",
-  "device_online",
-  "system",
+const NOTIFICATION_GROUPS: { label: string; types: NotificationType[] }[] = [
+  {
+    label: "Devices",
+    types: ["device_created", "device_updated", "device_deleted", "device_online", "device_offline"],
+  },
+  {
+    label: "Automations",
+    types: ["automation_created", "automation_updated", "automation_deleted", "automation_triggered", "automation_failed", "automation_partial_failure"],
+  },
+  {
+    label: "Team",
+    types: ["member_joined", "member_left", "member_role_changed"],
+  },
+  {
+    label: "Invitations",
+    types: ["invitation_created", "invitation_accepted", "invitation_declined"],
+  },
+  {
+    label: "Workspace & Security",
+    types: ["workspace_updated", "api_key_created", "api_key_revoked"],
+  },
+  {
+    label: "System",
+    types: ["system"],
+  },
 ];
 
 function severityIcon(severity: string) {
@@ -99,9 +132,11 @@ function severityBorderColor(severity: string) {
 
 function typeBadgeColor(type: NotificationType) {
   if (type.startsWith("automation")) return "bg-purple-100 text-purple-700";
-  if (type.startsWith("member") || type === "invitation_accepted")
+  if (type.startsWith("member") || type.startsWith("invitation"))
     return "bg-blue-100 text-blue-700";
   if (type.startsWith("device")) return "bg-orange-100 text-orange-700";
+  if (type.startsWith("workspace")) return "bg-teal-100 text-teal-700";
+  if (type.startsWith("api_key")) return "bg-amber-100 text-amber-700";
   return "bg-gray-100 text-gray-700";
 }
 
@@ -121,6 +156,8 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
+const PAGE_SIZE = 20;
+
 // ---- Component ----
 
 export function NotificationsPage() {
@@ -137,16 +174,31 @@ export function NotificationsPage() {
   const [markingId, setMarkingId] = useState<string | null>(null);
   const [savingPrefs, setSavingPrefs] = useState(false);
 
-  // ---- SWR: Notifications ----
+  // Load more state
+  const [notifications, setNotifications] = useState<WorkspaceNotification[]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | undefined>();
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  // ---- SWR: Initial notifications fetch ----
 
   const { data: notifData, mutate: mutateNotifs } = useSWR(
     token && workspaceSlug
       ? ["notifications", token, workspaceSlug, unreadOnly]
       : null,
     ([, t, s, uo]) =>
-      apiListNotifications(t, s, { unreadOnly: uo, limit: 100 }),
+      apiListNotifications(t, s, { unreadOnly: uo, limit: PAGE_SIZE }),
     { revalidateOnFocus: false }
   );
+
+  // Sync SWR data to local state (reset on filter change or refetch)
+  useEffect(() => {
+    if (notifData) {
+      setNotifications(notifData.notifications);
+      setHasMore(notifData.hasMore);
+      setNextCursor(notifData.nextCursor);
+    }
+  }, [notifData]);
 
   // ---- SWR: Unread count ----
 
@@ -168,7 +220,6 @@ export function NotificationsPage() {
     { revalidateOnFocus: false }
   );
 
-  const notifications = notifData?.notifications ?? [];
   const unreadCount = unreadData?.unreadCount ?? 0;
   const preferences: NotificationPreferences = prefsData ?? {
     disabledTypes: [],
@@ -176,6 +227,25 @@ export function NotificationsPage() {
   };
 
   // ---- Handlers ----
+
+  const handleLoadMore = useCallback(async () => {
+    if (!token || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await apiListNotifications(token, workspaceSlug, {
+        unreadOnly,
+        limit: PAGE_SIZE,
+        cursor: nextCursor,
+      });
+      setNotifications((prev) => [...prev, ...result.notifications]);
+      setHasMore(result.hasMore);
+      setNextCursor(result.nextCursor);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to load more notifications");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [token, workspaceSlug, unreadOnly, nextCursor, loadingMore]);
 
   const handleMarkRead = async (notificationId: string) => {
     if (!token) return;
@@ -270,10 +340,10 @@ export function NotificationsPage() {
           variant="ghost"
           size="sm"
           className="mb-4 text-gray-600 hover:text-gray-900"
-          onClick={() => router.push(`/${workspaceSlug}/settings`)}
+          onClick={() => router.push(`/${workspaceSlug}`)}
         >
           <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to Settings
+          Back to Dashboard
         </Button>
 
         {/* Header */}
@@ -287,7 +357,7 @@ export function NotificationsPage() {
                 Notifications
               </h1>
               <p className="text-sm text-gray-600">
-                Manage workspace notifications and preferences
+                Stay up to date with your workspace activity
               </p>
             </div>
           </div>
@@ -447,6 +517,26 @@ export function NotificationsPage() {
                       </div>
                     </div>
                   ))}
+
+                  {/* Load More */}
+                  {hasMore && (
+                    <div className="p-6 text-center">
+                      <Button
+                        variant="outline"
+                        onClick={handleLoadMore}
+                        disabled={loadingMore}
+                      >
+                        {loadingMore ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          "Load More"
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -466,43 +556,45 @@ export function NotificationsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6 pt-6 p-4 sm:p-6">
-              {/* Notification type toggles */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-gray-900">
-                  Notification Types
-                </h3>
-                <div className="space-y-3">
-                  {ALL_NOTIFICATION_TYPES.map((type) => {
-                    const isEnabled =
-                      !preferences.disabledTypes.includes(type);
-                    return (
-                      <div
-                        key={type}
-                        className="flex items-center justify-between p-3 rounded-lg border bg-gray-50/50 hover:bg-gray-50 transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`w-2 h-2 rounded-full ${
-                              isEnabled ? "bg-green-500" : "bg-gray-300"
-                            }`}
+              {/* Notification type toggles grouped by domain */}
+              {NOTIFICATION_GROUPS.map((group) => (
+                <div key={group.label} className="space-y-3">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    {group.label}
+                  </h3>
+                  <div className="space-y-2">
+                    {group.types.map((type) => {
+                      const isEnabled =
+                        !preferences.disabledTypes.includes(type);
+                      return (
+                        <div
+                          key={type}
+                          className="flex items-center justify-between p-3 rounded-lg border bg-gray-50/50 hover:bg-gray-50 transition-colors"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`w-2 h-2 rounded-full ${
+                                isEnabled ? "bg-green-500" : "bg-gray-300"
+                              }`}
+                            />
+                            <Label
+                              htmlFor={`type-${type}`}
+                              className="text-sm font-medium text-gray-700 cursor-pointer"
+                            >
+                              {NOTIFICATION_TYPE_LABELS[type]}
+                            </Label>
+                          </div>
+                          <Switch
+                            id={`type-${type}`}
+                            checked={isEnabled}
+                            onCheckedChange={() => handleToggleType(type)}
                           />
-                          <Label
-                            htmlFor={`type-${type}`}
-                            className="text-sm font-medium text-gray-700 cursor-pointer"
-                          >
-                            {NOTIFICATION_TYPE_LABELS[type]}
-                          </Label>
                         </div>
-                        <Switch
-                          id={`type-${type}`}
-                          checked={isEnabled}
-                          onCheckedChange={() => handleToggleType(type)}
-                        />
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              ))}
 
               {/* Email toggle */}
               <div className="space-y-4">

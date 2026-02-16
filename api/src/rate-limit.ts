@@ -1,5 +1,5 @@
 import type { StorageEnv } from '@/db/storage';
-import { queryByPk } from '@/db/storage';
+import { get } from '@/db/storage';
 import type { WorkspacePlan } from '@/db/types';
 
 export interface PlanLimits {
@@ -15,9 +15,8 @@ const PLAN_LIMITS: Record<WorkspacePlan, PlanLimits> = {
 };
 
 export async function getWorkspacePlan(env: StorageEnv, workspaceId: string): Promise<WorkspacePlan> {
-  const result = await queryByPk(env, `WS#${workspaceId}`);
-  const plan = (result.items.find((e: any) => e.sk === 'PLAN#current') as { plan?: WorkspacePlan } | undefined)?.plan;
-  return plan || 'starter';
+  const entity = await get(env, `WS#${workspaceId}`, 'PLAN#current') as { plan?: WorkspacePlan } | null;
+  return entity?.plan || 'starter';
 }
 
 // Simple R2-based token bucket per workspace per minute

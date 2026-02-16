@@ -12,7 +12,7 @@ import {
   badRequestResponse,
   toApiDevice,
 } from '@/api-responses';
-import { notifyWorkspaceActivity } from '@/notifications';
+import { notifyDeviceCreated, notifyDeviceUpdated, notifyDeviceDeleted } from '@/notifications';
 
 interface DevicesEnv extends AuthEnv, StorageEnv {
   DEVICE_DO: DurableObjectNamespace;
@@ -20,7 +20,7 @@ interface DevicesEnv extends AuthEnv, StorageEnv {
 
 export function devicesRouter(router: RouterType) {
   // Create device within workspace - requires manage access
-  router.post('/devices', async (request: Request, env: AuthEnv & StorageEnv) => {
+  router.post('/devices', async (request: Request, env: AuthEnv & StorageEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request);
     if (!requireRole(resolved, 'editor')) {
       return unauthorizedResponse();
@@ -49,7 +49,11 @@ export function devicesRouter(router: RouterType) {
       fieldMappings: body.fieldMappings,
     });
 
-    notifyWorkspaceActivity(env, workspaceId, `Device "${body.name}" created`, `A new ${body.type} device has been added to the workspace.`, { deviceId: device.deviceId, deviceName: body.name }).catch(() => {});
+    ctx.waitUntil(
+      notifyDeviceCreated(env, workspaceId, device.deviceId, body.name).catch((err) => {
+        console.error('[devices][notify][error]', err);
+      })
+    );
 
     return createdResponse(toApiDevice(device));
   });
@@ -70,7 +74,7 @@ export function devicesRouter(router: RouterType) {
   });
 
   // Update device
-  router.put('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv) => {
+  router.put('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'editor')) {
       return unauthorizedResponse();
@@ -151,6 +155,12 @@ export function devicesRouter(router: RouterType) {
       return notFoundResponse('Device not found');
     }
 
+    ctx.waitUntil(
+      notifyDeviceUpdated(env, workspaceId, deviceId, updated.name).catch((err) => {
+        console.error('[devices][notify][error]', err);
+      })
+    );
+
     return successResponse(toApiDevice(updated));
   });
 
@@ -179,7 +189,7 @@ export function devicesRouter(router: RouterType) {
   });
 
   // Delete device
-  router.delete('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv) => {
+  router.delete('/devices/:deviceId', async (request: any, env: AuthEnv & StorageEnv, ctx: ExecutionContext) => {
     const resolved = await resolveWorkspace(env, request as Request);
     if (!requireRole(resolved, 'admin')) {
       return unauthorizedResponse();
@@ -196,7 +206,11 @@ export function devicesRouter(router: RouterType) {
 
     await db.devices.delete(workspaceId, deviceId);
 
-    notifyWorkspaceActivity(env, workspaceId, `Device "${existing.name}" deleted`, `Device ${existing.name} has been removed from the workspace.`, { deviceId, deviceName: existing.name }).catch(() => {});
+    ctx.waitUntil(
+      notifyDeviceDeleted(env, workspaceId, deviceId, existing.name).catch((err) => {
+        console.error('[devices][notify][error]', err);
+      })
+    );
 
     return successResponse({ ok: true });
   });

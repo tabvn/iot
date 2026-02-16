@@ -71,9 +71,10 @@ function getTriggerIcon(triggerType: string) {
 // Helper to format trigger description
 function formatTriggerDescription(automation: Automation): string {
   const config = automation.triggerConfig;
+  if (!config) return "No trigger configured";
   switch (config.type) {
     case "device_data":
-      return `When device data matches ${config.conditions.length} condition${config.conditions.length > 1 ? "s" : ""}`;
+      return `When device data matches ${config.conditions?.length ?? 0} condition${(config.conditions?.length ?? 0) > 1 ? "s" : ""}`;
     case "device_status":
       return `When device goes ${config.status}`;
     case "schedule":
@@ -291,7 +292,7 @@ export function AutomationsPage() {
             <Activity className="w-5 h-5 opacity-80" />
           </div>
           <div className="text-4xl font-bold">
-            {automations.reduce((sum, a) => sum + a.actions.length, 0)}
+            {automations.reduce((sum, a) => sum + (a.actions?.length ?? 0), 0)}
           </div>
           <div className="text-xs mt-2 opacity-75">configured</div>
         </div>
@@ -382,11 +383,11 @@ export function AutomationsPage() {
                     <div className="flex items-center gap-4 text-xs text-gray-500">
                       <div className="flex items-center gap-1">
                         <Zap className="w-3 h-3" />
-                        <span>Trigger: {automation.triggerType.replace("_", " ")}</span>
+                        <span>Trigger: {automation.triggerType?.replace("_", " ") ?? "unknown"}</span>
                       </div>
                       <div className="flex items-center gap-1">
                         <Activity className="w-3 h-3" />
-                        <span>{automation.actions.length} action{automation.actions.length !== 1 ? "s" : ""}</span>
+                        <span>{automation.actions?.length ?? 0} action{(automation.actions?.length ?? 0) !== 1 ? "s" : ""}</span>
                       </div>
                     </div>
 

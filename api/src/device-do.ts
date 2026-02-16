@@ -114,7 +114,9 @@ export class DeviceDurableObject {
       if (this.workspaceId) {
         const { pk: dPk, sk: dSk } = Keys.device(this.workspaceId, this.deviceId);
         const device = await get<DeviceEntity>(this.env, dPk, dSk);
-        notifyDeviceOnline(this.env, this.workspaceId, this.deviceId, device?.name).catch(() => {});
+        await notifyDeviceOnline(this.env, this.workspaceId, this.deviceId, device?.name).catch((err) => {
+          console.error('[device-do][notify-online][error]', err);
+        });
       }
 
       // Heartbeat: send ping every 30s to detect stale connections
@@ -161,7 +163,9 @@ export class DeviceDurableObject {
         if (this.workspaceId) {
           const { pk: dPk, sk: dSk } = Keys.device(this.workspaceId, this.deviceId);
           const device = await get<DeviceEntity>(this.env, dPk, dSk);
-          notifyDeviceOffline(this.env, this.workspaceId, this.deviceId, device?.name).catch(() => {});
+          await notifyDeviceOffline(this.env, this.workspaceId, this.deviceId, device?.name).catch((err) => {
+            console.error('[device-do][notify-offline][error]', err);
+          });
         }
       });
 
@@ -176,7 +180,9 @@ export class DeviceDurableObject {
         if (this.workspaceId) {
           const { pk: dPk, sk: dSk } = Keys.device(this.workspaceId, this.deviceId);
           const device = await get<DeviceEntity>(this.env, dPk, dSk);
-          notifyDeviceOffline(this.env, this.workspaceId, this.deviceId, device?.name).catch(() => {});
+          await notifyDeviceOffline(this.env, this.workspaceId, this.deviceId, device?.name).catch((err) => {
+            console.error('[device-do][notify-offline][error]', err);
+          });
         }
       });
 
